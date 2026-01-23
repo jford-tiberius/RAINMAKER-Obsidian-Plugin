@@ -4521,6 +4521,9 @@ class LettaChatView extends ItemView {
 		// Add user message to chat
 		await this.addMessage("user", message);
 
+		// Show typing indicator immediately after user message
+		this.showTypingIndicator();
+
 		// Clear and reset input
 		this.messageInput.value = "";
 		this.messageInput.style.height = "auto";
@@ -4684,6 +4687,9 @@ class LettaChatView extends ItemView {
 
 			await this.addMessage("assistant", errorMessage, "Error");
 		} finally {
+			// Hide typing indicator
+			this.hideTypingIndicator();
+
 			// Re-enable input
 			this.messageInput.disabled = false;
 			this.sendButton.disabled = false;

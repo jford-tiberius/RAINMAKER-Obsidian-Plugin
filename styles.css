@@ -3156,7 +3156,7 @@
 }
 
 .letta-typing-visible {
-    display: block;
+    display: flex;
 }
 
 /* Status dot colors */
