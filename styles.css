@@ -356,6 +356,43 @@
     color: var(--text-muted);
 }
 
+/* Command autocomplete styles */
+.letta-command-dropdown .letta-autocomplete-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+}
+
+.letta-command-name {
+    font-weight: 600;
+    color: var(--interactive-accent);
+    font-family: var(--font-monospace);
+    font-size: 0.95em;
+    min-width: 70px;
+}
+
+.letta-command-description {
+    font-size: 0.9em;
+    color: var(--text-muted);
+}
+
+.letta-autocomplete-item.letta-command-item:hover .letta-command-name,
+.letta-autocomplete-item.letta-command-item.selected .letta-command-name {
+    color: var(--text-on-accent);
+}
+
+.letta-autocomplete-item.letta-command-item:hover,
+.letta-autocomplete-item.letta-command-item.selected {
+    background: var(--interactive-accent);
+}
+
+.letta-autocomplete-item.letta-command-item:hover .letta-command-description,
+.letta-autocomplete-item.letta-command-item.selected .letta-command-description {
+    color: var(--text-on-accent);
+    opacity: 0.85;
+}
+
 .letta-input-wrapper {
     flex: 1;
 }

@@ -2054,6 +2054,20 @@ def write_obsidian_note(
 	}
 }
 
+// Slash commands registry - easily extensible for future commands
+interface SlashCommand {
+	name: string;
+	description: string;
+	usage?: string;
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+	{ name: "vault", description: "Perform vault file operations", usage: "/vault <request>" },
+	{ name: "focus", description: "Toggle focus mode on/off" },
+	{ name: "clear", description: "Clear chat history display" },
+	{ name: "help", description: "Show available commands" },
+];
+
 class LettaChatView extends ItemView {
 	plugin: LettaPlugin;
 	chatContainer: HTMLElement;
@@ -2071,6 +2085,8 @@ class LettaChatView extends ItemView {
 	autocompleteDropdown: HTMLElement | null = null;
 	mentionedFiles: Set<string> = new Set();
 	selectedSuggestionIndex: number = -1;
+	// Track autocomplete mode: 'file' for @mentions, 'command' for /commands
+	autocompleteMode: 'file' | 'command' | null = null;
 	// Agent dropdown for quick switching
 	agentDropdownContent: HTMLElement | null = null;
 	loadMoreButton: HTMLElement | null = null;
@@ -2378,13 +2394,13 @@ class LettaChatView extends ItemView {
 			}
 		}, { signal });
 
-		// Auto-resize textarea and handle @-mentions
+		// Auto-resize textarea and handle @-mentions and /commands
 		this.messageInput.addEventListener("input", () => {
 			this.messageInput.style.height = "auto";
 			this.messageInput.style.height =
 				Math.min(this.messageInput.scrollHeight, 80) + "px";
 
-			this.handleMentionInput();
+			this.handleAutocompleteInput();
 		}, { signal });
 
 		// Start with empty chat
@@ -4667,6 +4683,40 @@ class LettaChatView extends ItemView {
 				`**Focus mode ${status}.**\n\n${this.plugin.settings.focusMode ? "The agent will now receive context about your currently open note." : "The agent will no longer track your current note."}`,
 				"System",
 			);
+			this.messageInput.value = "";
+			return;
+		}
+
+		// Handle /clear command - clear chat display
+		if (message.toLowerCase() === '/clear') {
+			if (this.chatContainer) {
+				this.chatContainer.empty();
+				// Re-add size limit warning (hidden by default)
+				this.sizeLimitWarning = this.chatContainer.createEl("div", {
+					cls: "letta-size-limit-warning",
+				});
+				this.sizeLimitWarning.style.display = "none";
+			}
+			await this.addMessage(
+				"assistant",
+				"**Chat display cleared.** Note: The agent's memory is not affected.",
+				"System",
+			);
+			this.messageInput.value = "";
+			return;
+		}
+
+		// Handle /help command - show available commands
+		if (message.toLowerCase() === '/help') {
+			const helpText = SLASH_COMMANDS.map(cmd =>
+				`- **/${cmd.name}** - ${cmd.description}${cmd.usage ? ` (${cmd.usage})` : ''}`
+			).join('\n');
+			await this.addMessage(
+				"assistant",
+				`**Available Commands:**\n\n${helpText}\n\n**Tips:**\n- Use \`@\` to mention and include files\n- The agent remembers your conversation history`,
+				"System",
+			);
+			this.messageInput.value = "";
 			return;
 		}
 
@@ -4917,11 +4967,35 @@ class LettaChatView extends ItemView {
 		}
 	}
 
-	handleMentionInput() {
+	handleAutocompleteInput() {
 		const cursorPos = this.messageInput.selectionStart;
 		const textBeforeCursor = this.messageInput.value.substring(0, cursorPos);
 
-		// Find the last @ symbol before cursor
+		// Check for /commands first (only at start of input)
+		if (textBeforeCursor.startsWith("/")) {
+			const commandText = textBeforeCursor.substring(1); // Remove '/'
+
+			// If there's a space, command selection is done
+			if (commandText.includes(" ")) {
+				this.hideAutocomplete();
+				return;
+			}
+
+			// Filter matching commands
+			const matches = SLASH_COMMANDS.filter(cmd =>
+				cmd.name.toLowerCase().startsWith(commandText.toLowerCase())
+			);
+
+			if (matches.length > 0) {
+				this.showCommandAutocomplete(matches);
+				return;
+			} else {
+				this.hideAutocomplete();
+				return;
+			}
+		}
+
+		// Check for @-mentions
 		const lastAtIndex = textBeforeCursor.lastIndexOf("@");
 
 		if (lastAtIndex === -1) {
@@ -4950,13 +5024,15 @@ class LettaChatView extends ItemView {
 			.slice(0, 10); // Limit to 10 results
 
 		if (matches.length > 0) {
-			this.showAutocomplete(matches, lastAtIndex);
+			this.showFileAutocomplete(matches, lastAtIndex);
 		} else {
 			this.hideAutocomplete();
 		}
 	}
 
-	showAutocomplete(files: any[], atPosition: number) {
+	showCommandAutocomplete(commands: SlashCommand[]) {
+		this.autocompleteMode = 'command';
+
 		// Create dropdown if it doesn't exist
 		if (!this.autocompleteDropdown) {
 			this.autocompleteDropdown = this.inputContainer.createEl("div", {
@@ -4966,12 +5042,69 @@ class LettaChatView extends ItemView {
 
 		// Clear and populate dropdown
 		this.autocompleteDropdown.empty();
+		this.autocompleteDropdown.addClass("letta-command-dropdown");
+		this.selectedSuggestionIndex = -1;
+
+		commands.forEach((cmd, index) => {
+			const item = this.autocompleteDropdown!.createEl("div", {
+				cls: "letta-autocomplete-item letta-command-item",
+				attr: { "data-index": index.toString(), "data-command": cmd.name }
+			});
+
+			const cmdName = item.createEl("div", {
+				cls: "letta-command-name",
+				text: `/${cmd.name}`
+			});
+
+			const cmdDesc = item.createEl("div", {
+				cls: "letta-command-description",
+				text: cmd.description
+			});
+
+			item.addEventListener("click", () => {
+				this.insertCommand(cmd);
+			});
+		});
+
+		this.autocompleteDropdown.style.display = "block";
+	}
+
+	insertCommand(cmd: SlashCommand) {
+		// Replace the current text with the command
+		if (cmd.usage) {
+			// Commands with arguments: insert command + space
+			this.messageInput.value = `/${cmd.name} `;
+		} else {
+			// Commands without arguments: insert and potentially execute
+			this.messageInput.value = `/${cmd.name}`;
+		}
+		this.messageInput.focus();
+		this.hideAutocomplete();
+
+		// Move cursor to end
+		const len = this.messageInput.value.length;
+		this.messageInput.setSelectionRange(len, len);
+	}
+
+	showFileAutocomplete(files: any[], atPosition: number) {
+		this.autocompleteMode = 'file';
+
+		// Create dropdown if it doesn't exist
+		if (!this.autocompleteDropdown) {
+			this.autocompleteDropdown = this.inputContainer.createEl("div", {
+				cls: "letta-autocomplete-dropdown"
+			});
+		}
+
+		// Clear and populate dropdown
+		this.autocompleteDropdown.empty();
+		this.autocompleteDropdown.removeClass("letta-command-dropdown");
 		this.selectedSuggestionIndex = -1;
 
 		files.forEach((file, index) => {
 			const item = this.autocompleteDropdown!.createEl("div", {
 				cls: "letta-autocomplete-item",
-				attr: { "data-index": index.toString() }
+				attr: { "data-index": index.toString(), "data-path": file.path }
 			});
 
 			const fileName = item.createEl("div", {
@@ -4996,6 +5129,7 @@ class LettaChatView extends ItemView {
 		if (this.autocompleteDropdown) {
 			this.autocompleteDropdown.style.display = "none";
 			this.selectedSuggestionIndex = -1;
+			this.autocompleteMode = null;
 		}
 	}
 
