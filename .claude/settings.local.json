@@ -3,7 +3,8 @@
     "allow": [
       "Bash(git ls-tree:*)",
       "Bash(dir /s /a \"%USERPROFILE%\")",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(gh api:*)"
     ]
   }
 }
