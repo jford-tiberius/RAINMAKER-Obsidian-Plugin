@@ -1060,11 +1060,19 @@ export default class LettaPlugin extends Plugin {
 		}
 	}
 
+	// Helper to get short focus block label (must stay under 50 chars)
+	getFocusBlockLabel(): string {
+		if (!this.agent) return "focus-unknown";
+		// Use last 12 chars of agent ID to stay under 50 char limit
+		const shortId = this.agent.id.slice(-12);
+		return `focus-${shortId}`;
+	}
+
 	// Focus Mode Methods
 	async ensureFocusBlock(): Promise<void> {
 		if (!this.agent || !this.client) return;
 
-		const focusBlockLabel = `obsidian-${this.agent.id}-focused-note`;
+		const focusBlockLabel = this.getFocusBlockLabel();
 
 		try {
 			// Check if block exists
@@ -1206,7 +1214,7 @@ export default class LettaPlugin extends Plugin {
 				}
 			}
 
-			const focusBlockLabel = `obsidian-${this.agent.id}-focused-note`;
+			const focusBlockLabel = this.getFocusBlockLabel();
 			await this.client.agents.blocks.modify(this.agent.id, focusBlockLabel, {
 				value: value,
 				limit: this.settings.focusBlockCharLimit,
@@ -11192,7 +11200,7 @@ class LettaSettingTab extends PluginSettingTab {
 
 							// Update the block limit if it exists
 							if (this.plugin.agent && this.plugin.focusBlockId) {
-								const focusBlockLabel = `obsidian-${this.plugin.agent.id}-focused-note`;
+								const focusBlockLabel = this.plugin.getFocusBlockLabel();
 								try {
 									await this.plugin.client?.agents.blocks.modify(
 										this.plugin.agent.id,
