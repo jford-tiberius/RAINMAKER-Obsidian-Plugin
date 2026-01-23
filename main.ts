@@ -2175,7 +2175,8 @@ class LettaChatView extends ItemView {
 			text: "⋮",
 		});
 		overflowButton.title = "More options";
-		overflowButton.addClass("letta-config-button letta-overflow-button");
+		overflowButton.addClass("letta-config-button");
+		overflowButton.addClass("letta-overflow-button");
 
 		const overflowContent = overflowMenu.createEl("div", {
 			cls: "letta-overflow-content",
