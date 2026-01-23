@@ -72,8 +72,10 @@
 
 .letta-chat-title-section {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
 }
 
 .letta-button-container {
@@ -178,6 +180,84 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* Compact status line */
+.letta-status-line {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.8em;
+    margin-top: 6px;
+    color: var(--text-muted);
+}
+
+.letta-connection-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.letta-vault-status {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    font-weight: 500;
+    background: var(--background-secondary);
+}
+
+.letta-vault-status.letta-vault-active {
+    color: var(--text-success);
+    background: rgba(var(--color-green-rgb), 0.15);
+}
+
+.letta-vault-status.letta-vault-disabled {
+    color: var(--text-muted);
+    opacity: 0.7;
+}
+
+/* Overflow menu (⋮) */
+.letta-overflow-menu {
+    position: relative;
+    display: inline-block;
+}
+
+.letta-overflow-button {
+    font-size: 1.2em !important;
+    font-weight: bold;
+    padding: 2px 6px !important;
+    min-width: 24px;
+    text-align: center;
+}
+
+.letta-overflow-content {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    min-width: 140px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+    margin-top: 4px;
+    overflow: hidden;
+}
+
+.letta-overflow-content.show {
+    display: block;
+}
+
+.letta-overflow-item {
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: background-color 0.15s ease;
+}
+
+.letta-overflow-item:hover {
+    background: var(--background-modifier-hover);
 }
 
 .letta-chat-subtitle {

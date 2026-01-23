@@ -124,8 +124,9 @@ interface LettaPluginSettings {
 	showReasoning: boolean; // Control whether reasoning messages are visible
 	enableStreaming: boolean; // Control whether to use streaming API responses
 	allowAgentCreation: boolean; // Control whether agent creation modal can be shown
-	enableCustomTools: boolean; // Control whether to register custom Obsidian tools
-	askBeforeToolRegistration: boolean; // Ask for consent before registering custom tools
+	askBeforeToolRegistration: boolean; // Ask for consent before registering vault tools
+	// Deprecated - use enableVaultTools instead
+	enableCustomTools?: boolean;
 	defaultNoteFolder: string; // Default folder for new notes created via custom tools
 	focusMode: boolean; // Control whether to track and share the currently viewed note
 	focusBlockCharLimit: number; // Character limit for the focus mode memory block
@@ -155,8 +156,7 @@ const DEFAULT_SETTINGS: LettaPluginSettings = {
 	showReasoning: true, // Default to showing reasoning messages in tool interactions
 	enableStreaming: true, // Default to enabling streaming for real-time responses
 	allowAgentCreation: true, // Default to enabling agent creation modal
-	enableCustomTools: true, // Default to enabling custom tools
-	askBeforeToolRegistration: true, // Default to asking before registering tools
+	askBeforeToolRegistration: true, // Default to asking before registering vault tools
 	defaultNoteFolder: "lettamade", // Default folder for agent-created notes
 	focusMode: true, // Default to enabling focus mode
 	focusBlockCharLimit: 4000, // Default character limit for focus block
@@ -256,6 +256,8 @@ export default class LettaPlugin extends Plugin {
 	isConnecting: boolean = false;
 	// RAINMAKER FIX: Connection promise for race condition prevention
 	private connectionPromise: Promise<boolean> | null = null;
+	// Track vault tools registration status
+	vaultToolsRegistered: boolean = false;
 
 	async onload() {
 		await this.loadSettings();
@@ -1024,10 +1026,21 @@ export default class LettaPlugin extends Plugin {
 				await this.saveSettings();
 
 
-				// Register Obsidian tools after successful agent setup (if enabled)
-				if (this.settings.enableCustomTools) {
-					await this.registerObsidianTools();
+				// Register vault tools after successful agent setup (if enabled)
+				if (this.settings.enableVaultTools) {
+					const toolsRegistered = await this.registerObsidianTools();
+					this.vaultToolsRegistered = toolsRegistered;
+					if (toolsRegistered) {
+						console.log("[Letta Plugin] Vault tools registered successfully");
+					} else {
+						console.warn("[Letta Plugin] Vault tools registration failed or was skipped");
+					}
+				} else {
+					this.vaultToolsRegistered = false;
+					console.log("[Letta Plugin] Vault tools disabled in settings - skipping registration");
 				}
+				// Update any open chat views with vault tools status
+				this.updateChatViewsVaultStatus();
 			} else {
 				// Agent with configured ID not found, clear the invalid ID
 				console.log(
@@ -1331,6 +1344,17 @@ export default class LettaPlugin extends Plugin {
 			workspace.revealLeaf(leaf);
 		}
 
+	}
+
+	// Update all open chat views with vault tools status
+	updateChatViewsVaultStatus(): void {
+		const leaves = this.app.workspace.getLeavesOfType(LETTA_CHAT_VIEW_TYPE);
+		for (const leaf of leaves) {
+			const view = leaf.view as LettaChatView;
+			if (view && view.updateVaultToolsIndicator) {
+				view.updateVaultToolsIndicator();
+			}
+		}
 	}
 
 	async openMemoryView(): Promise<void> {
@@ -1680,35 +1704,37 @@ def obsidian_delete_file(
 
 	async registerObsidianTools(): Promise<boolean> {
 		// Register vault collaboration tools for agent-vault interaction
+		console.log("[Letta Plugin] Starting vault tools registration...");
 
 		if (!this.client) {
-			console.error("Cannot register tools: Letta client not initialized");
+			console.error("[Letta Plugin] Cannot register tools: Letta client not initialized");
+			new Notice("Cannot register vault tools: Not connected to Letta");
 			return false;
 		}
 
 		if (!this.agent) {
-			console.log("[Letta Plugin] No agent attached, skipping tool registration");
-			return true;
+			console.warn("[Letta Plugin] Cannot register tools: No agent attached");
+			new Notice("Cannot register vault tools: No agent selected");
+			return false;
 		}
 
-		// Check if vault tools are enabled
-		if (!this.settings.enableVaultTools) {
-			console.log("[Letta Plugin] Vault tools disabled in settings");
-			return true;
-		}
-
-		// Check user consent if required
+		// Check user consent if required (first time only)
 		if (this.settings.askBeforeToolRegistration) {
 			console.log("[Letta Plugin] User consent required - showing modal...");
 			const consentModal = new ToolRegistrationConsentModal(this.app, this);
 			const userConsent = await consentModal.show();
 			if (!userConsent) {
 				console.log("[Letta Plugin] User declined tool registration");
+				new Notice("Vault tools not registered (user declined)");
 				return false;
 			}
+			// Don't ask again this session
+			this.settings.askBeforeToolRegistration = false;
+			await this.saveSettings();
 		}
 
 		const toolDefinitions = this.getVaultToolDefinitions();
+		console.log(`[Letta Plugin] Registering ${toolDefinitions.length} vault tools...`);
 		let registeredCount = 0;
 
 		for (const toolDef of toolDefinitions) {
@@ -1767,10 +1793,20 @@ def obsidian_delete_file(
 			}
 		}
 
-		if (registeredCount > 0) {
-			new Notice(`Registered ${registeredCount} vault tools successfully`);
+		// Report results
+		if (registeredCount === toolDefinitions.length) {
+			console.log(`[Letta Plugin] Successfully registered all ${registeredCount} vault tools`);
+			new Notice(`Vault tools ready (${registeredCount} tools)`);
+			return true;
+		} else if (registeredCount > 0) {
+			console.warn(`[Letta Plugin] Partially registered vault tools: ${registeredCount}/${toolDefinitions.length}`);
+			new Notice(`Vault tools partially ready (${registeredCount}/${toolDefinitions.length} tools)`);
+			return true; // Partial success is still usable
+		} else {
+			console.error("[Letta Plugin] Failed to register any vault tools");
+			new Notice("Failed to register vault tools - check console for details");
+			return false;
 		}
-		return registeredCount === toolDefinitions.length;
 	}
 
 	/* ORIGINAL APPROVAL-BASED CODE - KEPT FOR REFERENCE
@@ -2038,6 +2074,8 @@ class LettaChatView extends ItemView {
 	// Agent dropdown for quick switching
 	agentDropdownContent: HTMLElement | null = null;
 	loadMoreButton: HTMLElement | null = null;
+	// Vault tools status indicator
+	vaultToolsIndicator: HTMLElement | null = null;
 	// RAINMAKER FIX: AbortController for cleanup of event listeners
 	private abortController: AbortController | null = null;
 	// RAINMAKER FIX: Prevent concurrent message loads
@@ -2094,31 +2132,15 @@ class LettaChatView extends ItemView {
 			cls: "letta-button-container",
 		});
 
-		const configButton = headerButtonContainer.createEl("span", {
-			text: "Config",
-		});
-		configButton.title = "Configure agent properties";
-		configButton.addClass("letta-config-button");
-		configButton.addEventListener("click", () => this.openAgentConfig(), { signal });
-
-		const memoryButton = headerButtonContainer.createEl("span", {
-			text: "Memory",
-		});
-		memoryButton.title = "Open memory blocks panel";
-		memoryButton.addClass("letta-config-button");
-		memoryButton.addEventListener("click", () =>
-			this.plugin.openMemoryView(),
-		{ signal });
-
-		// Agent dropdown for quick switching
+		// Agent dropdown for quick switching (primary action)
 		const agentDropdown = headerButtonContainer.createEl("div", {
 			cls: "letta-agent-dropdown",
 		});
 
 		const switchAgentButton = agentDropdown.createEl("span", {
-			text: "Agent ▾",
+			text: "Switch ▾",
 		});
-		switchAgentButton.title = "Switch agent (click for recent, or browse all)";
+		switchAgentButton.title = "Switch to a different agent";
 		switchAgentButton.addClass("letta-config-button");
 
 		this.agentDropdownContent = agentDropdown.createEl("div", {
@@ -2144,28 +2166,77 @@ class LettaChatView extends ItemView {
 			}
 		}, { signal });
 
-		const adeButton = headerButtonContainer.createEl("span", { text: "ADE" });
-		adeButton.title = "Open in Letta Agent Development Environment";
-		adeButton.addClass("letta-config-button");
-		adeButton.addEventListener("click", () => this.openInADE(), { signal });
-
-		const statusIndicator = this.header.createEl("div", {
-			cls: "letta-status-indicator",
+		// Overflow menu (⋮) for secondary actions
+		const overflowMenu = headerButtonContainer.createEl("div", {
+			cls: "letta-overflow-menu",
 		});
-		this.statusDot = statusIndicator.createEl("span", {
+
+		const overflowButton = overflowMenu.createEl("span", {
+			text: "⋮",
+		});
+		overflowButton.title = "More options";
+		overflowButton.addClass("letta-config-button letta-overflow-button");
+
+		const overflowContent = overflowMenu.createEl("div", {
+			cls: "letta-overflow-content",
+		});
+
+		// Menu items
+		const configItem = overflowContent.createEl("div", { cls: "letta-overflow-item" });
+		configItem.textContent = "Agent Config";
+		configItem.addEventListener("click", () => {
+			overflowContent.classList.remove("show");
+			this.openAgentConfig();
+		}, { signal });
+
+		const memoryItem = overflowContent.createEl("div", { cls: "letta-overflow-item" });
+		memoryItem.textContent = "Memory Blocks";
+		memoryItem.addEventListener("click", () => {
+			overflowContent.classList.remove("show");
+			this.plugin.openMemoryView();
+		}, { signal });
+
+		const adeItem = overflowContent.createEl("div", { cls: "letta-overflow-item" });
+		adeItem.textContent = "Open in ADE";
+		adeItem.addEventListener("click", () => {
+			overflowContent.classList.remove("show");
+			this.openInADE();
+		}, { signal });
+
+		// Toggle overflow menu
+		overflowButton.addEventListener("click", (e) => {
+			e.stopPropagation();
+			overflowContent.classList.toggle("show");
+		}, { signal });
+
+		// Close overflow when clicking outside
+		document.addEventListener("click", (e) => {
+			if (!overflowMenu.contains(e.target as Node)) {
+				overflowContent.classList.remove("show");
+			}
+		}, { signal });
+
+		// Compact status line
+		const statusLine = this.header.createEl("div", {
+			cls: "letta-status-line",
+		});
+
+		// Connection status
+		const connectionStatus = statusLine.createEl("span", {
+			cls: "letta-connection-status",
+		});
+		this.statusDot = connectionStatus.createEl("span", {
 			cls: "letta-status-dot",
 		});
-		this.statusText = statusIndicator.createEl("span", {
+		this.statusText = connectionStatus.createEl("span", {
 			cls: "letta-status-text",
 		});
 
-		// Focus mode indicator
-		if (this.plugin.settings.focusMode) {
-			this.focusIndicator = this.header.createEl("div", {
-				cls: "letta-focus-indicator",
-			});
-			this.updateFocusIndicator();
-		}
+		// Vault tools status
+		this.vaultToolsIndicator = statusLine.createEl("span", {
+			cls: "letta-vault-status",
+		});
+		this.updateVaultToolsIndicator();
 
 		// Collapsible tips section
 		const tipsSection = container.createEl("div", { cls: "letta-tips-section" });
@@ -3822,6 +3893,32 @@ class LettaChatView extends ItemView {
 			fileInfo.title = `Currently focused on: ${activeFile.path}`;
 		} else {
 			this.focusIndicator.style.display = "none";
+		}
+	}
+
+	updateVaultToolsIndicator() {
+		if (!this.vaultToolsIndicator) return;
+
+		const enabled = this.plugin.settings.enableVaultTools;
+		const registered = this.plugin.vaultToolsRegistered;
+
+		this.vaultToolsIndicator.empty();
+
+		if (!enabled) {
+			this.vaultToolsIndicator.addClass("letta-vault-disabled");
+			this.vaultToolsIndicator.removeClass("letta-vault-active");
+			this.vaultToolsIndicator.textContent = "Vault: Off";
+			this.vaultToolsIndicator.title = "Vault tools are disabled. Enable in settings to allow file operations.";
+		} else if (registered) {
+			this.vaultToolsIndicator.addClass("letta-vault-active");
+			this.vaultToolsIndicator.removeClass("letta-vault-disabled");
+			this.vaultToolsIndicator.textContent = "Vault: Active";
+			this.vaultToolsIndicator.title = "Vault tools are active. Agent can read, write, and search files.";
+		} else {
+			this.vaultToolsIndicator.removeClass("letta-vault-active");
+			this.vaultToolsIndicator.removeClass("letta-vault-disabled");
+			this.vaultToolsIndicator.textContent = "Vault: Pending";
+			this.vaultToolsIndicator.title = "Vault tools enabled but not yet registered with agent.";
 		}
 	}
 
@@ -10917,33 +11014,6 @@ class LettaSettingTab extends PluginSettingTab {
 								}
 							}
 						}
-					}),
-			);
-
-		// Custom Tools Settings
-		containerEl.createEl("h3", { text: "Custom Tools" });
-
-		new Setting(containerEl)
-			.setName("Enable Custom Tools")
-			.setDesc(
-				"Allow the agent to use custom Obsidian tools like creating notes, searching vault, etc."
-			)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.enableCustomTools)
-					.onChange(async (value) => {
-						this.plugin.settings.enableCustomTools = value;
-						await this.plugin.saveSettings();
-						
-						// Register tools immediately if enabled and agent is available
-						if (value && this.plugin.agent) {
-							await this.plugin.registerObsidianTools();
-						}
-						
-						new Notice(value 
-							? "Custom tools enabled - agent can now create notes and more"
-							: "Custom tools disabled"
-						);
 					}),
 			);
 
