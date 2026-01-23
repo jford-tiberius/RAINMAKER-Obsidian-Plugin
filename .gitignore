@@ -23,3 +23,9 @@ ai-stuff/
 
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
+
+# npm cache (accidentally created folders)
+%USERPROFILE%/
+
+# Windows null device file
+nul
