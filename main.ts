@@ -280,13 +280,13 @@ export default class LettaPlugin extends Plugin {
 		);
 
 		// Add ribbon icons
-		this.addRibbonIcon("bot", "Open Letta Chat", (evt: MouseEvent) => {
+		this.addRibbonIcon("bot", "Open Rainmaker Chat", (evt: MouseEvent) => {
 			this.openChatView();
 		});
 
 		this.addRibbonIcon(
 			"brain-circuit",
-			"Open Letta Memory Blocks",
+			"Open Rainmaker Memory Blocks",
 			(evt: MouseEvent) => {
 				this.openMemoryView();
 			},
