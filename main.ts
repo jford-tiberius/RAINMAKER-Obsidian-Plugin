@@ -3721,11 +3721,13 @@ class LettaChatView extends ItemView {
 	}
 
 	showTypingIndicator() {
-		if (this.typingIndicator) {
+		if (this.typingIndicator && this.chatContainer) {
+			// Move typing indicator to end of chat container so it appears after messages
+			this.chatContainer.appendChild(this.typingIndicator);
 			this.typingIndicator.removeClass("letta-typing-hidden");
 			this.typingIndicator.addClass("letta-typing-visible");
 			// Scroll to bottom to show the typing indicator
-			this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
+			this.typingIndicator.scrollIntoView({ behavior: "smooth", block: "end" });
 		}
 	}
 
