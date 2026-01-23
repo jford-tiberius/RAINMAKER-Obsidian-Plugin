@@ -3795,3 +3795,352 @@
     font-family: var(--font-interface);
     resize: vertical;
 }
+
+/* ========================================
+   Agent Dropdown Styles
+   ======================================== */
+
+.letta-agent-dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.letta-agent-dropdown-content {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    min-width: 220px;
+    max-width: 300px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    z-index: 1000;
+    margin-top: 4px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.letta-agent-dropdown-content.show {
+    display: block;
+}
+
+.letta-dropdown-header {
+    padding: 10px 14px 6px;
+    font-size: 0.75em;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.letta-dropdown-item {
+    padding: 10px 14px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.letta-dropdown-item:hover {
+    background: var(--background-modifier-hover);
+}
+
+.letta-dropdown-item.active {
+    background: var(--background-modifier-border-hover);
+}
+
+.letta-dropdown-item.active .letta-dropdown-item-name::before {
+    content: "● ";
+    color: var(--interactive-accent);
+}
+
+.letta-dropdown-item-name {
+    font-weight: 500;
+    color: var(--text-normal);
+}
+
+.letta-dropdown-item-project {
+    font-size: 0.8em;
+    color: var(--text-muted);
+}
+
+.letta-dropdown-divider {
+    height: 1px;
+    background: var(--background-modifier-border);
+    margin: 6px 0;
+}
+
+.letta-dropdown-item-browse {
+    color: var(--text-accent);
+}
+
+.letta-dropdown-item-browse:hover {
+    background: var(--background-modifier-hover);
+}
+
+/* ========================================
+   Load More Button Styles
+   ======================================== */
+
+.letta-load-more {
+    text-align: center;
+    padding: 12px;
+    margin-bottom: 8px;
+}
+
+.letta-load-more-btn {
+    padding: 6px 18px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 16px;
+    color: var(--text-muted);
+    font-size: 0.85em;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.letta-load-more-btn:hover {
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
+    border-color: var(--background-modifier-border-hover);
+}
+
+/* ========================================
+   Vault Tool Result Styles
+   ======================================== */
+
+.letta-vault-result {
+    background: var(--background-secondary);
+    border-radius: 8px;
+    padding: 12px;
+    margin: 8px 0;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.letta-vault-result-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.letta-vault-result-icon {
+    font-size: 1.2em;
+}
+
+.letta-vault-result-title {
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.letta-vault-result-content {
+    font-family: var(--font-monospace);
+    font-size: 0.85em;
+    white-space: pre-wrap;
+    overflow-x: auto;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.letta-vault-file-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.letta-vault-file-item {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--background-modifier-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.letta-vault-file-item:last-child {
+    border-bottom: none;
+}
+
+.letta-vault-file-path {
+    color: var(--text-accent);
+    cursor: pointer;
+}
+
+.letta-vault-file-path:hover {
+    text-decoration: underline;
+}
+
+.letta-vault-file-meta {
+    font-size: 0.8em;
+    color: var(--text-muted);
+}
+
+/* ========================================
+   Vault Operation Approval Modal
+   ======================================== */
+
+.letta-vault-approval-modal {
+    max-width: 600px;
+}
+
+.letta-approval-warning {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding: 10px;
+    background: var(--background-secondary);
+    border-radius: 6px;
+}
+
+.letta-approval-icon {
+    font-size: 1.5em;
+}
+
+.letta-approval-path {
+    background: var(--background-primary-alt);
+    padding: 10px 14px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.letta-approval-path code {
+    font-family: var(--font-monospace);
+    color: var(--text-accent);
+}
+
+.letta-approval-content {
+    margin-bottom: 16px;
+}
+
+.letta-approval-content strong {
+    display: block;
+    margin-bottom: 8px;
+}
+
+.letta-approval-content ul {
+    margin: 8px 0;
+    padding-left: 20px;
+}
+
+.letta-approval-preview {
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--background-primary-alt);
+    padding: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    margin-top: 8px;
+}
+
+.letta-approval-preview code {
+    font-family: var(--font-monospace);
+    font-size: 0.85em;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.letta-approval-delete-warning {
+    background: rgba(200, 0, 0, 0.1);
+    border: 1px solid rgba(200, 0, 0, 0.3);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 16px;
+    color: var(--color-red);
+}
+
+.letta-approval-delete-warning p {
+    margin: 8px 0 0 0;
+    font-size: 0.9em;
+}
+
+.letta-approval-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+    padding: 10px;
+    background: var(--background-secondary);
+    border-radius: 6px;
+}
+
+.letta-approval-checkbox input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+}
+
+.letta-approval-checkbox label {
+    font-size: 0.9em;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.letta-vault-approval-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.letta-vault-approval-icon {
+    font-size: 2em;
+}
+
+.letta-vault-approval-title {
+    font-size: 1.2em;
+    font-weight: 600;
+}
+
+.letta-vault-approval-path {
+    background: var(--background-secondary);
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-family: var(--font-monospace);
+    margin-bottom: 16px;
+}
+
+.letta-vault-approval-preview {
+    max-height: 300px;
+    overflow-y: auto;
+    background: var(--background-primary-alt);
+    padding: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    margin-bottom: 16px;
+}
+
+.letta-vault-approval-diff {
+    font-family: var(--font-monospace);
+    font-size: 0.85em;
+    white-space: pre-wrap;
+}
+
+.letta-vault-approval-diff-add {
+    background: rgba(0, 200, 0, 0.15);
+    color: var(--color-green);
+}
+
+.letta-vault-approval-diff-remove {
+    background: rgba(200, 0, 0, 0.15);
+    color: var(--color-red);
+}
+
+.letta-vault-approval-buttons {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+}
+
+.letta-vault-approval-trust {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    font-size: 0.9em;
+    color: var(--text-muted);
+}

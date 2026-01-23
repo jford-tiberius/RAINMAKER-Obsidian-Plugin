@@ -60,6 +60,14 @@ type AgentType =
 	| "workflow_agent"
 	| "sleeptime_agent";
 
+// Recent agent for quick switching
+interface RecentAgent {
+	id: string;
+	name: string;
+	projectSlug?: string;
+	lastUsed: number; // timestamp
+}
+
 interface LettaPluginSettings {
 	lettaApiKey: string;
 	lettaBaseUrl: string;
@@ -75,6 +83,14 @@ interface LettaPluginSettings {
 	defaultNoteFolder: string; // Default folder for new notes created via custom tools
 	focusMode: boolean; // Control whether to track and share the currently viewed note
 	focusBlockCharLimit: number; // Character limit for the focus mode memory block
+	// Multi-agent settings
+	recentAgents: RecentAgent[]; // Recently used agents for quick switching
+	loadHistoryOnSwitch: boolean; // Load conversation history when switching agents
+	historyPageSize: number; // Number of messages to load at once
+	// Vault tools settings
+	enableVaultTools: boolean; // Master toggle for vault collaboration tools
+	vaultToolsApprovedThisSession: boolean; // Session-based approval for write operations
+	blockedFolders: string[]; // Folders agents cannot access
 	// Deprecated properties (kept for compatibility)
 	sourceName?: string;
 	autoSync?: boolean;
@@ -98,6 +114,14 @@ const DEFAULT_SETTINGS: LettaPluginSettings = {
 	defaultNoteFolder: "lettamade", // Default folder for agent-created notes
 	focusMode: true, // Default to enabling focus mode
 	focusBlockCharLimit: 4000, // Default character limit for focus block
+	// Multi-agent defaults
+	recentAgents: [], // No recent agents initially
+	loadHistoryOnSwitch: true, // Load history when switching agents
+	historyPageSize: 50, // Load 50 messages at a time
+	// Vault tools defaults
+	enableVaultTools: true, // Enable vault collaboration tools
+	vaultToolsApprovedThisSession: false, // Require approval on first use
+	blockedFolders: [".obsidian", ".trash"], // Block system folders
 };
 
 interface LettaAgent {
@@ -189,6 +213,9 @@ export default class LettaPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+
+		// Reset session-based approvals on plugin load
+		this.resetSessionApprovals();
 
 		// Register the chat view
 		this.registerView(
@@ -328,6 +355,44 @@ export default class LettaPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 		this.initializeClient();
+	}
+
+	// Track recently used agents for quick switching
+	async trackRecentAgent(agent: LettaAgent, projectSlug?: string): Promise<void> {
+		const recent: RecentAgent = {
+			id: agent.id,
+			name: agent.name,
+			projectSlug: projectSlug || this.settings.lettaProjectSlug,
+			lastUsed: Date.now(),
+		};
+
+		// Remove if already in list
+		this.settings.recentAgents = this.settings.recentAgents.filter(
+			(a) => a.id !== agent.id
+		);
+
+		// Add to front, limit to 5
+		this.settings.recentAgents.unshift(recent);
+		this.settings.recentAgents = this.settings.recentAgents.slice(0, 5);
+
+		await this.saveSettings();
+	}
+
+	// Reset session-based approvals (call on plugin load)
+	resetSessionApprovals(): void {
+		this.settings.vaultToolsApprovedThisSession = false;
+	}
+
+	// Check if a folder path is blocked
+	isFolderBlocked(folderPath: string): boolean {
+		// Always block hidden folders (starting with .)
+		if (folderPath.startsWith(".") || folderPath.includes("/.")) {
+			return true;
+		}
+		// Check against blocked folders list
+		return this.settings.blockedFolders.some(
+			(blocked) => folderPath === blocked || folderPath.startsWith(blocked + "/")
+		);
 	}
 
 	private initializeClient() {
@@ -1358,57 +1423,14 @@ export default class LettaPlugin extends Plugin {
 		}
 	}
 
-	async registerObsidianTools(): Promise<boolean> {
-		// RAINMAKER FIX: Re-enabled tool registration without approval requirement
-		// The approval-based flow is broken upstream, so we use direct execution instead.
-		// NOTE: This means tools execute without user confirmation - use with caution.
-
-		if (!this.client) {
-			console.error("Cannot register tools: Letta client not initialized");
-			return false;
-		}
-
-		if (!this.agent) {
-			console.log("[Letta Plugin] No agent attached, skipping tool registration");
-			return true;
-		}
-
-		const toolName = "write_obsidian_note";
-
-		// Check if the tool already exists
-		console.log(`[Letta Plugin] Checking if tool '${toolName}' already exists...`);
-		let existingTool: any = null;
-		try {
-			const tools = await this.client.tools.list({ name: toolName });
-			existingTool = tools.find((tool: any) => tool.name === toolName);
-			if (existingTool) {
-				console.log(`[Letta Plugin] Tool '${toolName}' already exists with ID: ${existingTool.id}`);
-			}
-		} catch (error) {
-			console.error("Failed to check existing tools:", error);
-		}
-
-		// Check if tool is already attached to agent
-		if (existingTool) {
-			try {
-				const agentDetails = await this.client.agents.retrieve(this.agent.id);
-				const currentTools = agentDetails.tools || [];
-				const isToolAttached = currentTools.some((t: any) =>
-					t.name === toolName || t === toolName ||
-					(typeof t === 'object' && t.id === existingTool.id)
-				);
-
-				if (isToolAttached) {
-					console.log(`[Letta Plugin] Tool '${toolName}' already attached to agent`);
-					return true;
-				}
-			} catch (error) {
-				console.error("Failed to check agent tools:", error);
-			}
-		}
-
-		// Tool source code - RAINMAKER: Simplified without approval requirement
-		const writeNoteToolCode = `
+	// Vault tool definitions
+	private getVaultToolDefinitions(): { name: string; code: string; description: string; tags: string[] }[] {
+		return [
+			{
+				name: "write_obsidian_note",
+				description: "Write content to an Obsidian note file",
+				tags: ["obsidian", "note-creation", "vault-write"],
+				code: `
 def write_obsidian_note(
     title: str,
     content: str,
@@ -1423,10 +1445,190 @@ def write_obsidian_note(
         folder: Optional folder path within the vault (e.g., 'journal' or 'projects/myproject')
 
     Returns:
-        str: Success message with the file path
+        str: JSON with action details for the Obsidian plugin to execute
     """
-    return f"Note '{title}' ready to be written to {folder or 'vault root'}"
-`;
+    import json
+    return json.dumps({
+        "action": "write_file",
+        "title": title,
+        "content": content,
+        "folder": folder
+    })
+`
+			},
+			{
+				name: "obsidian_read_file",
+				description: "Read the contents of an Obsidian note by file path",
+				tags: ["obsidian", "vault-read"],
+				code: `
+def obsidian_read_file(
+    file_path: str,
+    include_metadata: bool = True
+) -> str:
+    """
+    Read the contents of an Obsidian note.
+
+    Args:
+        file_path: Path to the file relative to vault root (e.g., 'folder/note.md')
+        include_metadata: Whether to include frontmatter, tags, and link info
+
+    Returns:
+        str: JSON with action details for the Obsidian plugin to execute
+    """
+    import json
+    return json.dumps({
+        "action": "read_file",
+        "file_path": file_path,
+        "include_metadata": include_metadata
+    })
+`
+			},
+			{
+				name: "obsidian_search_vault",
+				description: "Search the Obsidian vault for files by name, content, or tags",
+				tags: ["obsidian", "vault-search"],
+				code: `
+def obsidian_search_vault(
+    query: str,
+    search_type: str = "all",
+    folder: str = "",
+    limit: int = 20
+) -> str:
+    """
+    Search the Obsidian vault for files matching criteria.
+
+    Args:
+        query: Search query string
+        search_type: Where to search - "name", "content", "tags", "path", or "all"
+        folder: Limit search to specific folder (optional)
+        limit: Maximum number of results (default 20)
+
+    Returns:
+        str: JSON with action details for the Obsidian plugin to execute
+    """
+    import json
+    return json.dumps({
+        "action": "search_vault",
+        "query": query,
+        "search_type": search_type,
+        "folder": folder,
+        "limit": limit
+    })
+`
+			},
+			{
+				name: "obsidian_list_files",
+				description: "List files in an Obsidian vault folder",
+				tags: ["obsidian", "vault-read"],
+				code: `
+def obsidian_list_files(
+    folder: str = "",
+    recursive: bool = False,
+    limit: int = 50
+) -> str:
+    """
+    List files in a vault folder.
+
+    Args:
+        folder: Folder path to list (empty string = vault root)
+        recursive: Whether to include files in subfolders
+        limit: Maximum number of files to return
+
+    Returns:
+        str: JSON with action details for the Obsidian plugin to execute
+    """
+    import json
+    return json.dumps({
+        "action": "list_files",
+        "folder": folder,
+        "recursive": recursive,
+        "limit": limit
+    })
+`
+			},
+			{
+				name: "obsidian_modify_file",
+				description: "Modify an existing Obsidian note (append, prepend, or replace section)",
+				tags: ["obsidian", "vault-write"],
+				code: `
+def obsidian_modify_file(
+    file_path: str,
+    operation: str,
+    content: str,
+    section_heading: str = ""
+) -> str:
+    """
+    Modify an existing Obsidian note. Requires user approval.
+
+    Args:
+        file_path: Path to the file to modify
+        operation: Type of modification - "append", "prepend", or "replace_section"
+        content: Content to insert/append/replace with
+        section_heading: Heading name for replace_section (e.g., "## Notes")
+
+    Returns:
+        str: JSON with action details for the Obsidian plugin to execute
+    """
+    import json
+    return json.dumps({
+        "action": "modify_file",
+        "file_path": file_path,
+        "operation": operation,
+        "content": content,
+        "section_heading": section_heading,
+        "requires_approval": True
+    })
+`
+			},
+			{
+				name: "obsidian_delete_file",
+				description: "Delete an Obsidian note (requires user approval)",
+				tags: ["obsidian", "vault-write"],
+				code: `
+def obsidian_delete_file(
+    file_path: str,
+    move_to_trash: bool = True
+) -> str:
+    """
+    Delete an Obsidian note. Requires user approval.
+
+    Args:
+        file_path: Path to the file to delete
+        move_to_trash: If true, moves to system trash; if false, permanently deletes
+
+    Returns:
+        str: JSON with action details for the Obsidian plugin to execute
+    """
+    import json
+    return json.dumps({
+        "action": "delete_file",
+        "file_path": file_path,
+        "move_to_trash": move_to_trash,
+        "requires_approval": True
+    })
+`
+			}
+		];
+	}
+
+	async registerObsidianTools(): Promise<boolean> {
+		// Register vault collaboration tools for agent-vault interaction
+
+		if (!this.client) {
+			console.error("Cannot register tools: Letta client not initialized");
+			return false;
+		}
+
+		if (!this.agent) {
+			console.log("[Letta Plugin] No agent attached, skipping tool registration");
+			return true;
+		}
+
+		// Check if vault tools are enabled
+		if (!this.settings.enableVaultTools) {
+			console.log("[Letta Plugin] Vault tools disabled in settings");
+			return true;
+		}
 
 		// Check user consent if required
 		if (this.settings.askBeforeToolRegistration) {
@@ -1439,35 +1641,69 @@ def write_obsidian_note(
 			}
 		}
 
-		try {
-			let tool = existingTool;
+		const toolDefinitions = this.getVaultToolDefinitions();
+		let registeredCount = 0;
 
-			if (!existingTool) {
-				// Create the tool
-				console.log(`[Letta Plugin] Creating new tool '${toolName}'...`);
-				tool = await this.client.tools.upsert({
-					name: toolName,
-					sourceCode: writeNoteToolCode,
-					description: "Write content to an Obsidian note file",
-					tags: ["obsidian", "note-creation"],
-				} as any);
-				console.log("Successfully created Obsidian note tool:", tool);
+		for (const toolDef of toolDefinitions) {
+			try {
+				// Check if the tool already exists
+				let existingTool: any = null;
+				try {
+					const tools = await this.client.tools.list({ name: toolDef.name });
+					existingTool = tools.find((tool: any) => tool.name === toolDef.name);
+				} catch (error) {
+					console.error(`Failed to check existing tool '${toolDef.name}':`, error);
+				}
+
+				// Check if tool is already attached to agent
+				if (existingTool) {
+					try {
+						const agentDetails = await this.client.agents.retrieve(this.agent.id);
+						const currentTools = agentDetails.tools || [];
+						const isToolAttached = currentTools.some((t: any) =>
+							t.name === toolDef.name || t === toolDef.name ||
+							(typeof t === 'object' && t.id === existingTool.id)
+						);
+
+						if (isToolAttached) {
+							console.log(`[Letta Plugin] Tool '${toolDef.name}' already attached to agent`);
+							registeredCount++;
+							continue;
+						}
+					} catch (error) {
+						console.error(`Failed to check agent tools for '${toolDef.name}':`, error);
+					}
+				}
+
+				// Create or get the tool
+				let tool = existingTool;
+				if (!existingTool) {
+					console.log(`[Letta Plugin] Creating new tool '${toolDef.name}'...`);
+					tool = await this.client.tools.upsert({
+						name: toolDef.name,
+						sourceCode: toolDef.code,
+						description: toolDef.description,
+						tags: toolDef.tags,
+					} as any);
+					console.log(`[Letta Plugin] Successfully created tool '${toolDef.name}'`);
+				}
+
+				// Attach tool to agent
+				if (tool && tool.id) {
+					console.log(`[Letta Plugin] Attaching tool '${toolDef.name}' to agent...`);
+					await this.client.agents.tools.attach(this.agent.id, tool.id);
+					console.log(`[Letta Plugin] Successfully attached '${toolDef.name}' tool to agent`);
+					registeredCount++;
+				}
+			} catch (error: any) {
+				console.error(`Failed to register tool '${toolDef.name}':`, error);
 			}
-
-			// Attach tool to agent
-			if (tool && tool.id) {
-				console.log(`[Letta Plugin] Attaching tool '${toolName}' to agent ${this.agent.id}...`);
-				await this.client.agents.tools.attach(this.agent.id, tool.id);
-				console.log(`[Letta Plugin] Successfully attached '${toolName}' tool to agent`);
-			}
-
-			new Notice("Obsidian note creation tool registered successfully");
-			return true;
-		} catch (error: any) {
-			console.error("Failed to register Obsidian tools:", error);
-			new Notice("Failed to register note creation tool: " + error.message);
-			return false;
 		}
+
+		if (registeredCount > 0) {
+			new Notice(`Registered ${registeredCount} vault tools successfully`);
+		}
+		return registeredCount === toolDefinitions.length;
 	}
 
 	/* ORIGINAL APPROVAL-BASED CODE - KEPT FOR REFERENCE
@@ -1732,6 +1968,9 @@ class LettaChatView extends ItemView {
 	autocompleteDropdown: HTMLElement | null = null;
 	mentionedFiles: Set<string> = new Set();
 	selectedSuggestionIndex: number = -1;
+	// Agent dropdown for quick switching
+	agentDropdownContent: HTMLElement | null = null;
+	loadMoreButton: HTMLElement | null = null;
 	// RAINMAKER FIX: AbortController for cleanup of event listeners
 	private abortController: AbortController | null = null;
 	// RAINMAKER FIX: Prevent concurrent message loads
@@ -1804,14 +2043,39 @@ class LettaChatView extends ItemView {
 			this.plugin.openMemoryView(),
 		{ signal });
 
-		const switchAgentButton = headerButtonContainer.createEl("span", {
-			text: "Agent",
+		// Agent dropdown for quick switching
+		const agentDropdown = headerButtonContainer.createEl("div", {
+			cls: "letta-agent-dropdown",
 		});
-		switchAgentButton.title = "Switch to different agent";
+
+		const switchAgentButton = agentDropdown.createEl("span", {
+			text: "Agent ▾",
+		});
+		switchAgentButton.title = "Switch agent (click for recent, or browse all)";
 		switchAgentButton.addClass("letta-config-button");
-		switchAgentButton.addEventListener("click", () =>
-			this.openAgentSwitcher(),
-		{ signal });
+
+		this.agentDropdownContent = agentDropdown.createEl("div", {
+			cls: "letta-agent-dropdown-content",
+		});
+
+		// Toggle dropdown on click
+		switchAgentButton.addEventListener("click", (e) => {
+			e.stopPropagation();
+			if (this.agentDropdownContent) {
+				const isVisible = this.agentDropdownContent.classList.contains("show");
+				if (!isVisible) {
+					this.populateAgentDropdown();
+				}
+				this.agentDropdownContent.classList.toggle("show");
+			}
+		}, { signal });
+
+		// Close dropdown when clicking outside
+		document.addEventListener("click", (e) => {
+			if (this.agentDropdownContent && !agentDropdown.contains(e.target as Node)) {
+				this.agentDropdownContent.classList.remove("show");
+			}
+		}, { signal });
 
 		const adeButton = headerButtonContainer.createEl("span", { text: "ADE" });
 		adeButton.title = "Open in Letta Agent Development Environment";
@@ -2078,8 +2342,15 @@ class LettaChatView extends ItemView {
 			// Don't add this message - it should have been filtered and handled by typing indicator
 			return null;
 		}
+		// Generate a unique message ID for pagination tracking
+		const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
 		const messageEl = this.chatContainer.createEl("div", {
 			cls: `letta-message letta-message-${type}`,
+			attr: {
+				"data-message-id": messageId,
+				"data-timestamp": new Date().toISOString(),
+			},
 		});
 
 		// Create bubble wrapper
@@ -2306,35 +2577,57 @@ class LettaChatView extends ItemView {
 		await this.updateChatStatus();
 	}
 
-	async loadHistoricalMessages() {
+	async loadHistoricalMessages(options?: { loadMore?: boolean }) {
 		// RAINMAKER FIX: Prevent concurrent message loads
 		if (this.isLoadingMessages) {
 			console.log("[Letta Plugin] Message load already in progress, skipping");
 			return;
 		}
 
-		// Only load if we're connected and chat container is empty (excluding disconnected message)
+		// Only load if we're connected and chat container exists
 		if (!this.plugin.agent || !this.chatContainer) {
 			return;
 		}
 
-		// Check if we already have messages (don't reload on every status update)
-		const existingMessages =
-			this.chatContainer.querySelectorAll(".letta-message");
-		if (existingMessages.length > 0) {
-			return;
+		const loadMore = options?.loadMore || false;
+
+		// Check if we already have messages (don't reload on every status update, unless loading more)
+		if (!loadMore) {
+			const existingMessages =
+				this.chatContainer.querySelectorAll(".letta-message");
+			if (existingMessages.length > 0) {
+				return;
+			}
 		}
 
 		// RAINMAKER FIX: Set loading flag
 		this.isLoadingMessages = true;
 
 		try {
-			// Load last 50 messages by default
-			const messages = await this.plugin.makeRequest(
-				`/v1/agents/${this.plugin.agent?.id}/messages?limit=50`,
-			);
+			const limit = this.plugin.settings.historyPageSize || 50;
+
+			// Build query - if loading more, we need to get messages before the oldest one we have
+			let endpoint = `/v1/agents/${this.plugin.agent?.id}/messages?limit=${limit}`;
+
+			// Get oldest message ID if loading more
+			if (loadMore) {
+				const oldestMessageId = this.getOldestMessageId();
+				if (oldestMessageId) {
+					endpoint += `&before=${oldestMessageId}`;
+				}
+			}
+
+			const messages = await this.plugin.makeRequest(endpoint);
 
 			if (!messages || messages.length === 0) {
+				if (!loadMore) {
+					// Show welcome message for new conversations
+					await this.addMessage(
+						"assistant",
+						`Ready to chat with **${this.plugin.agent.name}**. How can I help you today?`,
+						"System",
+					);
+				}
 				return;
 			}
 
@@ -2363,8 +2656,21 @@ class LettaChatView extends ItemView {
 					new Date(a.date).getTime() - new Date(b.date).getTime(),
 			);
 
-			// Process messages in groups (reasoning -> tool_call -> tool_return -> assistant)
-			await this.processMessagesInGroups(sortedMessages);
+			if (loadMore) {
+				// Prepend older messages at top
+				await this.prependMessages(sortedMessages);
+			} else {
+				// Process messages normally (append)
+				await this.processMessagesInGroups(sortedMessages);
+			}
+
+			// Show "Load More" button if we got a full page
+			if (validMessages.length === limit) {
+				this.showLoadMoreButton();
+			} else {
+				// Remove load more button if we didn't get a full page
+				this.removeLoadMoreButton();
+			}
 		} catch (error) {
 			console.error(
 				"[Letta Plugin] Failed to load historical messages:",
@@ -2385,6 +2691,131 @@ class LettaChatView extends ItemView {
 			// RAINMAKER FIX: Always reset loading flag
 			this.isLoadingMessages = false;
 		}
+	}
+
+	// Get the oldest message ID for pagination
+	getOldestMessageId(): string | undefined {
+		const messages = this.chatContainer.querySelectorAll("[data-message-id]");
+		if (messages.length === 0) return undefined;
+		return messages[0].getAttribute("data-message-id") || undefined;
+	}
+
+	// Show "Load Earlier Messages" button
+	showLoadMoreButton(): void {
+		if (this.loadMoreButton) return;
+
+		this.loadMoreButton = document.createElement("div");
+		this.loadMoreButton.className = "letta-load-more";
+
+		const btn = document.createElement("button");
+		btn.className = "letta-load-more-btn";
+		btn.textContent = "Load Earlier Messages";
+		btn.addEventListener("click", async () => {
+			this.removeLoadMoreButton();
+			await this.loadHistoricalMessages({ loadMore: true });
+		});
+
+		this.loadMoreButton.appendChild(btn);
+
+		// Insert at top of chat container
+		this.chatContainer.insertBefore(this.loadMoreButton, this.chatContainer.firstChild);
+	}
+
+	// Remove the load more button
+	removeLoadMoreButton(): void {
+		if (this.loadMoreButton) {
+			this.loadMoreButton.remove();
+			this.loadMoreButton = null;
+		}
+	}
+
+	// Prepend older messages to the chat (for pagination)
+	async prependMessages(messages: any[]): Promise<void> {
+		// Save scroll position
+		const scrollPos = this.chatContainer.scrollTop;
+		const scrollHeight = this.chatContainer.scrollHeight;
+
+		// Create a temporary container for the old messages
+		const tempContainer = document.createElement("div");
+
+		// Process messages into temp container
+		for (const msg of messages) {
+			const messageEl = await this.createMessageElement(msg);
+			if (messageEl) {
+				tempContainer.appendChild(messageEl);
+			}
+		}
+
+		// Insert all prepended messages after the load more button (or at the start)
+		const insertPoint = this.loadMoreButton?.nextSibling || this.chatContainer.firstChild;
+		while (tempContainer.firstChild) {
+			this.chatContainer.insertBefore(tempContainer.firstChild, insertPoint);
+		}
+
+		// Restore scroll position (keep user at same visual position)
+		const newScrollHeight = this.chatContainer.scrollHeight;
+		this.chatContainer.scrollTop = scrollPos + (newScrollHeight - scrollHeight);
+	}
+
+	// Create a single message element (for prepending)
+	async createMessageElement(msg: any): Promise<HTMLElement | null> {
+		const messageType = msg.message_type || msg.type;
+		const messageId = msg.id || `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+		// Skip system messages
+		if (messageType === "system_message" || messageType === "system") {
+			return null;
+		}
+
+		// Create wrapper element
+		const wrapper = document.createElement("div");
+
+		// Handle based on message type
+		if (messageType === "user_message" || messageType === "user") {
+			const content = msg.content || msg.message?.content || "";
+			if (content.trim()) {
+				const el = document.createElement("div");
+				el.className = "letta-message letta-message-user";
+				el.setAttribute("data-message-id", messageId);
+				el.setAttribute("data-timestamp", msg.date || new Date().toISOString());
+
+				const contentEl = document.createElement("div");
+				contentEl.className = "letta-message-content";
+				contentEl.textContent = content;
+				el.appendChild(contentEl);
+
+				wrapper.appendChild(el);
+			}
+		} else if (messageType === "assistant_message" || messageType === "assistant") {
+			const content = msg.content || msg.message?.content || "";
+			if (content.trim()) {
+				const filteredContent = this.filterSystemPromptContent(content);
+				if (filteredContent.trim()) {
+					const el = document.createElement("div");
+					el.className = "letta-message letta-message-assistant";
+					el.setAttribute("data-message-id", messageId);
+					el.setAttribute("data-timestamp", msg.date || new Date().toISOString());
+
+					const contentEl = document.createElement("div");
+					contentEl.className = "letta-message-content";
+					await MarkdownRenderer.renderMarkdown(
+						filteredContent,
+						contentEl,
+						"",
+						new Component()
+					);
+					el.appendChild(contentEl);
+
+					wrapper.appendChild(el);
+				}
+			}
+		} else if (messageType === "reasoning_message" || messageType === "reasoning") {
+			// Skip reasoning messages in prepended history for cleaner view
+			// (they're shown in real-time streaming but not needed in history)
+			return null;
+		}
+
+		return wrapper.children.length > 0 ? wrapper.firstChild as HTMLElement : null;
 	}
 
 	// Filter out system prompt content that shouldn't be shown to users
@@ -4635,13 +5066,25 @@ class LettaChatView extends ItemView {
 		let isArchivalMemorySearch = false;
 		let isArchivalMemoryInsert = false;
 		let isObsidianNoteProposal = false;
+		let isVaultTool = false;
 		let effectiveToolCallData = toolCallData;
+
+		// Vault tool names
+		const vaultToolNames = [
+			"write_obsidian_note",
+			"obsidian_read_file",
+			"obsidian_search_vault",
+			"obsidian_list_files",
+			"obsidian_modify_file",
+			"obsidian_delete_file"
+		];
 
 		if (toolName) {
 			// Use provided tool name (for historical messages)
 			isArchivalMemorySearch = toolName === "archival_memory_search";
 			isArchivalMemoryInsert = toolName === "archival_memory_insert";
 			isObsidianNoteProposal = toolName === "propose_obsidian_note";
+			isVaultTool = vaultToolNames.includes(toolName);
 		} else {
 			// Parse from DOM (for streaming messages)
 			try {
@@ -4656,6 +5099,7 @@ class LettaChatView extends ItemView {
 						isArchivalMemorySearch = detectedToolName === "archival_memory_search";
 						isArchivalMemoryInsert = detectedToolName === "archival_memory_insert";
 						isObsidianNoteProposal = detectedToolName === "propose_obsidian_note";
+						isVaultTool = vaultToolNames.includes(detectedToolName);
 					} else {
 						// Fallback to parsing from content (legacy)
 						effectiveToolCallData = JSON.parse(
@@ -4671,6 +5115,7 @@ class LettaChatView extends ItemView {
 							fallbackToolName === "archival_memory_insert";
 						isObsidianNoteProposal =
 							fallbackToolName === "propose_obsidian_note";
+						isVaultTool = vaultToolNames.includes(fallbackToolName);
 					}
 				}
 			} catch (e) {
@@ -4678,17 +5123,22 @@ class LettaChatView extends ItemView {
 			}
 		}
 
-		// Fallback detection: check tool result content for note proposals
-		if (!isObsidianNoteProposal) {
-			try {
-				const parsedResult = JSON.parse(toolResult);
+		// Fallback detection: check tool result content for vault actions
+		let vaultAction: any = null;
+		try {
+			const parsedResult = JSON.parse(toolResult);
+			if (parsedResult.action) {
+				vaultAction = parsedResult;
+				isVaultTool = true;
+
+				// Check for legacy note proposal format
 				if (parsedResult.action === "create_note" && parsedResult.title && parsedResult.content) {
 					console.log("[Letta Plugin] 🔍 Fallback detection: Found note proposal in tool result!");
 					isObsidianNoteProposal = true;
 				}
-			} catch (e) {
-				// Not JSON or not a note proposal, continue normally
 			}
+		} catch (e) {
+			// Not JSON or not a vault action, continue normally
 		}
 
 		// Debug logging for tool detection
@@ -4698,6 +5148,8 @@ class LettaChatView extends ItemView {
 			isArchivalMemorySearch,
 			isArchivalMemoryInsert,
 			isObsidianNoteProposal,
+			isVaultTool,
+			vaultAction: vaultAction?.action,
 			toolResultPreview: toolResult.substring(0, 100) + "..."
 		});
 
@@ -4741,6 +5193,9 @@ class LettaChatView extends ItemView {
 			} else if (isObsidianNoteProposal) {
 				// Show pretty note preview instead of raw JSON for note proposals
 				this.createNotePreviewDisplay(toolResultContent, toolResult);
+			} else if (isVaultTool && vaultAction) {
+				// Execute vault tool and display result
+				await this.executeVaultToolAndDisplay(toolResultContent, vaultAction, toolName);
 			} else {
 				// Add full content to expandable section for other tools
 				const toolResultDiv = toolResultContent.createEl("div", {
@@ -5104,6 +5559,604 @@ class LettaChatView extends ItemView {
 			});
 			fallback.textContent = `Memory insert completed. Result: ${toolResult}`;
 		}
+	}
+
+	// ========================================
+	// Vault Tool Execution Methods
+	// ========================================
+
+	async executeVaultToolAndDisplay(
+		container: HTMLElement,
+		vaultAction: any,
+		toolName?: string
+	): Promise<void> {
+		console.log("[Letta Plugin] Executing vault tool:", vaultAction.action, vaultAction);
+
+		try {
+			let result: any;
+
+			switch (vaultAction.action) {
+				case "read_file":
+					result = await this.executeReadFile(vaultAction);
+					this.displayReadFileResult(container, result);
+					break;
+
+				case "search_vault":
+					result = await this.executeSearchVault(vaultAction);
+					this.displaySearchResult(container, result);
+					break;
+
+				case "list_files":
+					result = await this.executeListFiles(vaultAction);
+					this.displayListFilesResult(container, result);
+					break;
+
+				case "write_file":
+					result = await this.executeWriteFile(vaultAction);
+					this.displayWriteResult(container, result);
+					break;
+
+				case "modify_file":
+					result = await this.executeModifyFile(vaultAction);
+					this.displayModifyResult(container, result);
+					break;
+
+				case "delete_file":
+					result = await this.executeDeleteFile(vaultAction);
+					this.displayDeleteResult(container, result);
+					break;
+
+				default:
+					container.createEl("div", {
+						cls: "letta-tool-result-text",
+						text: `Unknown vault action: ${vaultAction.action}`,
+					});
+			}
+		} catch (error: any) {
+			console.error("[Letta Plugin] Vault tool execution error:", error);
+			container.createEl("div", {
+				cls: "letta-vault-result letta-vault-error",
+				text: `Error: ${error.message}`,
+			});
+		}
+	}
+
+	// Read a file from the vault
+	async executeReadFile(action: any): Promise<any> {
+		const filePath = action.file_path;
+
+		// Check if folder is blocked
+		const folderPath = filePath.substring(0, filePath.lastIndexOf("/")) || "";
+		if (this.plugin.isFolderBlocked(folderPath)) {
+			return { error: `Access denied: ${folderPath} is a restricted folder` };
+		}
+
+		const file = this.app.vault.getAbstractFileByPath(filePath);
+		if (!(file instanceof TFile)) {
+			return { error: `File not found: ${filePath}` };
+		}
+
+		const content = await this.app.vault.read(file);
+
+		const result: any = {
+			path: file.path,
+			name: file.basename,
+			content: content,
+		};
+
+		if (action.include_metadata !== false) {
+			const cache = this.app.metadataCache.getFileCache(file);
+			result.frontmatter = cache?.frontmatter || {};
+			result.tags = cache?.tags?.map((t) => t.tag) || [];
+			result.headings = cache?.headings?.map((h) => ({ level: h.level, heading: h.heading })) || [];
+			result.links = cache?.links?.map((l) => l.link) || [];
+			result.created = file.stat.ctime;
+			result.modified = file.stat.mtime;
+			result.size = file.stat.size;
+		}
+
+		return result;
+	}
+
+	// Search the vault
+	async executeSearchVault(action: any): Promise<any> {
+		const query = (action.query || "").toLowerCase();
+		const searchType = action.search_type || "all";
+		const folder = action.folder || "";
+		const limit = action.limit || 20;
+
+		const files = this.app.vault.getMarkdownFiles();
+		const results: any[] = [];
+
+		for (const file of files) {
+			if (results.length >= limit) break;
+
+			// Filter by folder
+			if (folder && !file.path.startsWith(folder)) continue;
+
+			// Check if folder is blocked
+			const fileFolder = file.path.substring(0, file.path.lastIndexOf("/")) || "";
+			if (this.plugin.isFolderBlocked(fileFolder)) continue;
+
+			let matched = false;
+			const cache = this.app.metadataCache.getFileCache(file);
+
+			switch (searchType) {
+				case "name":
+					matched = file.basename.toLowerCase().includes(query);
+					break;
+				case "tags":
+					const tags = cache?.tags?.map((t) => t.tag.toLowerCase()) || [];
+					matched = tags.some((t) => t.includes(query));
+					break;
+				case "content":
+					const content = await this.app.vault.cachedRead(file);
+					matched = content.toLowerCase().includes(query);
+					break;
+				case "path":
+					matched = file.path.toLowerCase().includes(query);
+					break;
+				case "all":
+				default:
+					matched = file.basename.toLowerCase().includes(query) ||
+						file.path.toLowerCase().includes(query);
+					if (!matched) {
+						const fileTags = cache?.tags?.map((t) => t.tag.toLowerCase()) || [];
+						matched = fileTags.some((t) => t.includes(query));
+					}
+					if (!matched && query) {
+						const fileContent = await this.app.vault.cachedRead(file);
+						matched = fileContent.toLowerCase().includes(query);
+					}
+					break;
+			}
+
+			if (matched) {
+				const content = await this.app.vault.cachedRead(file);
+				results.push({
+					path: file.path,
+					name: file.basename,
+					folder: file.parent?.path || "",
+					modified: file.stat.mtime,
+					preview: content.substring(0, 200) + (content.length > 200 ? "..." : ""),
+				});
+			}
+		}
+
+		return {
+			query: action.query,
+			search_type: searchType,
+			results: results,
+			total_found: results.length,
+		};
+	}
+
+	// List files in a folder
+	async executeListFiles(action: any): Promise<any> {
+		const folder = action.folder || "";
+		const recursive = action.recursive || false;
+		const limit = action.limit || 50;
+
+		// Check if folder is blocked
+		if (folder && this.plugin.isFolderBlocked(folder)) {
+			return { error: `Access denied: ${folder} is a restricted folder` };
+		}
+
+		const files = this.app.vault.getMarkdownFiles();
+		const results: any[] = [];
+
+		for (const file of files) {
+			if (results.length >= limit) break;
+
+			// Filter by folder
+			if (folder) {
+				if (recursive) {
+					if (!file.path.startsWith(folder + "/") && file.path !== folder) continue;
+				} else {
+					const fileFolder = file.parent?.path || "";
+					if (fileFolder !== folder) continue;
+				}
+			} else if (!recursive) {
+				// Root folder only
+				if (file.parent?.path) continue;
+			}
+
+			// Check if folder is blocked
+			const fileFolder = file.path.substring(0, file.path.lastIndexOf("/")) || "";
+			if (this.plugin.isFolderBlocked(fileFolder)) continue;
+
+			const cache = this.app.metadataCache.getFileCache(file);
+			results.push({
+				path: file.path,
+				name: file.basename,
+				folder: file.parent?.path || "",
+				modified: file.stat.mtime,
+				size: file.stat.size,
+				tags: cache?.tags?.map((t) => t.tag) || [],
+			});
+		}
+
+		return {
+			folder: folder || "(vault root)",
+			recursive: recursive,
+			files: results,
+			total: results.length,
+		};
+	}
+
+	// Write/create a file (requires approval)
+	async executeWriteFile(action: any): Promise<any> {
+		const title = action.title;
+		const content = action.content;
+		const folder = action.folder || this.plugin.settings.defaultNoteFolder;
+
+		// Check if folder is blocked
+		if (folder && this.plugin.isFolderBlocked(folder)) {
+			return { error: `Access denied: ${folder} is a restricted folder` };
+		}
+
+		// Check for session approval
+		if (action.requires_approval && !this.plugin.settings.vaultToolsApprovedThisSession) {
+			// Show approval modal
+			const approved = await this.showVaultApprovalModal("write", { title, folder, content });
+			if (!approved) {
+				return { error: "User declined write operation" };
+			}
+		}
+
+		// Sanitize filename
+		const sanitizedTitle = title.replace(/[\\/:*?"<>|]/g, "_");
+		const fileName = `${sanitizedTitle}.md`;
+		const filePath = folder ? `${folder}/${fileName}` : fileName;
+
+		// Create folder if needed
+		if (folder) {
+			const folderExists = this.app.vault.getAbstractFileByPath(folder);
+			if (!folderExists) {
+				await this.app.vault.createFolder(folder);
+			}
+		}
+
+		// Create or overwrite file
+		const existingFile = this.app.vault.getAbstractFileByPath(filePath);
+		if (existingFile instanceof TFile) {
+			await this.app.vault.modify(existingFile, content);
+		} else {
+			await this.app.vault.create(filePath, content);
+		}
+
+		return {
+			success: true,
+			path: filePath,
+			action: existingFile ? "modified" : "created",
+		};
+	}
+
+	// Modify an existing file (requires approval)
+	async executeModifyFile(action: any): Promise<any> {
+		const filePath = action.file_path;
+		const operation = action.operation;
+		const content = action.content;
+		const sectionHeading = action.section_heading;
+
+		// Check if folder is blocked
+		const folder = filePath.substring(0, filePath.lastIndexOf("/")) || "";
+		if (this.plugin.isFolderBlocked(folder)) {
+			return { error: `Access denied: ${folder} is a restricted folder` };
+		}
+
+		const file = this.app.vault.getAbstractFileByPath(filePath);
+		if (!(file instanceof TFile)) {
+			return { error: `File not found: ${filePath}` };
+		}
+
+		// Check for session approval
+		if (action.requires_approval && !this.plugin.settings.vaultToolsApprovedThisSession) {
+			const approved = await this.showVaultApprovalModal("modify", { filePath, operation, content });
+			if (!approved) {
+				return { error: "User declined modify operation" };
+			}
+		}
+
+		const existingContent = await this.app.vault.read(file);
+		let newContent: string;
+
+		switch (operation) {
+			case "append":
+				newContent = existingContent + "\n" + content;
+				break;
+			case "prepend":
+				newContent = content + "\n" + existingContent;
+				break;
+			case "replace_section":
+				if (!sectionHeading) {
+					return { error: "section_heading required for replace_section operation" };
+				}
+				// Find and replace section
+				const sectionRegex = new RegExp(
+					`(${sectionHeading}[^\n]*\n)([\\s\\S]*?)(?=\n#{1,6}\\s|$)`,
+					"m"
+				);
+				if (sectionRegex.test(existingContent)) {
+					newContent = existingContent.replace(sectionRegex, `$1${content}\n`);
+				} else {
+					// Section not found, append at end
+					newContent = existingContent + `\n\n${sectionHeading}\n${content}`;
+				}
+				break;
+			default:
+				return { error: `Unknown operation: ${operation}` };
+		}
+
+		await this.app.vault.modify(file, newContent);
+
+		return {
+			success: true,
+			path: filePath,
+			operation: operation,
+		};
+	}
+
+	// Delete a file (requires approval)
+	async executeDeleteFile(action: any): Promise<any> {
+		const filePath = action.file_path;
+		const moveToTrash = action.move_to_trash !== false;
+
+		// Check if folder is blocked
+		const folder = filePath.substring(0, filePath.lastIndexOf("/")) || "";
+		if (this.plugin.isFolderBlocked(folder)) {
+			return { error: `Access denied: ${folder} is a restricted folder` };
+		}
+
+		const file = this.app.vault.getAbstractFileByPath(filePath);
+		if (!(file instanceof TFile)) {
+			return { error: `File not found: ${filePath}` };
+		}
+
+		// Always require approval for delete
+		if (!this.plugin.settings.vaultToolsApprovedThisSession) {
+			const approved = await this.showVaultApprovalModal("delete", { filePath, moveToTrash });
+			if (!approved) {
+				return { error: "User declined delete operation" };
+			}
+		}
+
+		if (moveToTrash) {
+			await this.app.vault.trash(file, true);
+		} else {
+			await this.app.vault.delete(file);
+		}
+
+		return {
+			success: true,
+			path: filePath,
+			action: moveToTrash ? "moved_to_trash" : "permanently_deleted",
+		};
+	}
+
+	// Show approval modal for vault operations
+	async showVaultApprovalModal(
+		operation: "write" | "modify" | "delete",
+		details: any
+	): Promise<boolean> {
+		return new Promise((resolve) => {
+			const modal = new VaultOperationApprovalModal(
+				this.app,
+				this.plugin,
+				operation,
+				details,
+				(approved, trustSession) => {
+					if (approved && trustSession) {
+						this.plugin.settings.vaultToolsApprovedThisSession = true;
+					}
+					resolve(approved);
+				}
+			);
+			modal.open();
+		});
+	}
+
+	// Display methods for vault tool results
+	displayReadFileResult(container: HTMLElement, result: any): void {
+		container.empty();
+
+		if (result.error) {
+			container.createEl("div", {
+				cls: "letta-vault-result letta-vault-error",
+				text: result.error,
+			});
+			return;
+		}
+
+		const wrapper = container.createEl("div", { cls: "letta-vault-result" });
+
+		const header = wrapper.createEl("div", { cls: "letta-vault-result-header" });
+		header.createEl("span", { cls: "letta-vault-result-icon", text: "📄" });
+		header.createEl("span", { cls: "letta-vault-result-title", text: result.name });
+
+		// File path link
+		const pathEl = wrapper.createEl("div", { cls: "letta-vault-file-path" });
+		pathEl.textContent = result.path;
+		pathEl.addEventListener("click", () => {
+			const file = this.app.vault.getAbstractFileByPath(result.path);
+			if (file instanceof TFile) {
+				this.app.workspace.getLeaf().openFile(file);
+			}
+		});
+
+		// Metadata if present
+		if (result.tags?.length || result.headings?.length) {
+			const metaEl = wrapper.createEl("div", { cls: "letta-vault-file-meta" });
+			if (result.tags?.length) {
+				metaEl.createEl("span", { text: `Tags: ${result.tags.join(", ")}` });
+			}
+		}
+
+		// Content preview
+		const contentEl = wrapper.createEl("div", { cls: "letta-vault-result-content" });
+		const preview = result.content.substring(0, 500);
+		contentEl.textContent = preview + (result.content.length > 500 ? "..." : "");
+	}
+
+	displaySearchResult(container: HTMLElement, result: any): void {
+		container.empty();
+
+		const wrapper = container.createEl("div", { cls: "letta-vault-result" });
+
+		const header = wrapper.createEl("div", { cls: "letta-vault-result-header" });
+		header.createEl("span", { cls: "letta-vault-result-icon", text: "🔍" });
+		header.createEl("span", {
+			cls: "letta-vault-result-title",
+			text: `Found ${result.total_found} results for "${result.query}"`,
+		});
+
+		if (result.results.length === 0) {
+			wrapper.createEl("div", {
+				cls: "letta-vault-file-meta",
+				text: "No matching files found.",
+			});
+			return;
+		}
+
+		const list = wrapper.createEl("ul", { cls: "letta-vault-file-list" });
+
+		for (const file of result.results) {
+			const item = list.createEl("li", { cls: "letta-vault-file-item" });
+
+			const pathEl = item.createEl("span", { cls: "letta-vault-file-path" });
+			pathEl.textContent = file.path;
+			pathEl.addEventListener("click", () => {
+				const vaultFile = this.app.vault.getAbstractFileByPath(file.path);
+				if (vaultFile instanceof TFile) {
+					this.app.workspace.getLeaf().openFile(vaultFile);
+				}
+			});
+
+			if (file.preview) {
+				const previewEl = item.createEl("div", { cls: "letta-vault-file-meta" });
+				previewEl.textContent = file.preview;
+			}
+		}
+	}
+
+	displayListFilesResult(container: HTMLElement, result: any): void {
+		container.empty();
+
+		if (result.error) {
+			container.createEl("div", {
+				cls: "letta-vault-result letta-vault-error",
+				text: result.error,
+			});
+			return;
+		}
+
+		const wrapper = container.createEl("div", { cls: "letta-vault-result" });
+
+		const header = wrapper.createEl("div", { cls: "letta-vault-result-header" });
+		header.createEl("span", { cls: "letta-vault-result-icon", text: "📁" });
+		header.createEl("span", {
+			cls: "letta-vault-result-title",
+			text: `${result.total} files in ${result.folder}`,
+		});
+
+		const list = wrapper.createEl("ul", { cls: "letta-vault-file-list" });
+
+		for (const file of result.files) {
+			const item = list.createEl("li", { cls: "letta-vault-file-item" });
+
+			const pathEl = item.createEl("span", { cls: "letta-vault-file-path" });
+			pathEl.textContent = file.name;
+			pathEl.addEventListener("click", () => {
+				const vaultFile = this.app.vault.getAbstractFileByPath(file.path);
+				if (vaultFile instanceof TFile) {
+					this.app.workspace.getLeaf().openFile(vaultFile);
+				}
+			});
+
+			const metaEl = item.createEl("span", { cls: "letta-vault-file-meta" });
+			metaEl.textContent = file.folder || "(root)";
+		}
+	}
+
+	displayWriteResult(container: HTMLElement, result: any): void {
+		container.empty();
+
+		if (result.error) {
+			container.createEl("div", {
+				cls: "letta-vault-result letta-vault-error",
+				text: result.error,
+			});
+			return;
+		}
+
+		const wrapper = container.createEl("div", { cls: "letta-vault-result" });
+
+		const header = wrapper.createEl("div", { cls: "letta-vault-result-header" });
+		header.createEl("span", { cls: "letta-vault-result-icon", text: "✅" });
+		header.createEl("span", {
+			cls: "letta-vault-result-title",
+			text: `File ${result.action}: ${result.path}`,
+		});
+
+		const pathEl = wrapper.createEl("div", { cls: "letta-vault-file-path" });
+		pathEl.textContent = "Click to open: " + result.path;
+		pathEl.addEventListener("click", () => {
+			const file = this.app.vault.getAbstractFileByPath(result.path);
+			if (file instanceof TFile) {
+				this.app.workspace.getLeaf().openFile(file);
+			}
+		});
+	}
+
+	displayModifyResult(container: HTMLElement, result: any): void {
+		container.empty();
+
+		if (result.error) {
+			container.createEl("div", {
+				cls: "letta-vault-result letta-vault-error",
+				text: result.error,
+			});
+			return;
+		}
+
+		const wrapper = container.createEl("div", { cls: "letta-vault-result" });
+
+		const header = wrapper.createEl("div", { cls: "letta-vault-result-header" });
+		header.createEl("span", { cls: "letta-vault-result-icon", text: "✏️" });
+		header.createEl("span", {
+			cls: "letta-vault-result-title",
+			text: `File modified (${result.operation}): ${result.path}`,
+		});
+
+		const pathEl = wrapper.createEl("div", { cls: "letta-vault-file-path" });
+		pathEl.textContent = "Click to open: " + result.path;
+		pathEl.addEventListener("click", () => {
+			const file = this.app.vault.getAbstractFileByPath(result.path);
+			if (file instanceof TFile) {
+				this.app.workspace.getLeaf().openFile(file);
+			}
+		});
+	}
+
+	displayDeleteResult(container: HTMLElement, result: any): void {
+		container.empty();
+
+		if (result.error) {
+			container.createEl("div", {
+				cls: "letta-vault-result letta-vault-error",
+				text: result.error,
+			});
+			return;
+		}
+
+		const wrapper = container.createEl("div", { cls: "letta-vault-result" });
+
+		const header = wrapper.createEl("div", { cls: "letta-vault-result-header" });
+		header.createEl("span", { cls: "letta-vault-result-icon", text: "🗑️" });
+		header.createEl("span", {
+			cls: "letta-vault-result-title",
+			text: `File ${result.action === "moved_to_trash" ? "moved to trash" : "deleted"}: ${result.path}`,
+		});
 	}
 
 	async createTempNoteForProposal(proposal: ObsidianNoteProposal): Promise<string> {
@@ -6968,6 +8021,97 @@ class LettaChatView extends ItemView {
 		);
 	}
 
+	// Populate the agent dropdown with recent agents
+	populateAgentDropdown(): void {
+		if (!this.agentDropdownContent) return;
+
+		this.agentDropdownContent.empty();
+
+		const recentAgents = this.plugin.settings.recentAgents;
+
+		if (recentAgents.length > 0) {
+			// Recent agents section
+			const recentHeader = this.agentDropdownContent.createEl("div", {
+				cls: "letta-dropdown-header",
+				text: "Recent Agents",
+			});
+
+			for (const agent of recentAgents) {
+				const agentItem = this.agentDropdownContent.createEl("div", {
+					cls: "letta-dropdown-item",
+				});
+
+				const isActive = agent.id === this.plugin.agent?.id;
+				if (isActive) {
+					agentItem.addClass("active");
+				}
+
+				agentItem.createEl("span", {
+					text: agent.name,
+					cls: "letta-dropdown-item-name"
+				});
+
+				if (agent.projectSlug) {
+					agentItem.createEl("span", {
+						text: agent.projectSlug,
+						cls: "letta-dropdown-item-project"
+					});
+				}
+
+				agentItem.addEventListener("click", async () => {
+					if (this.agentDropdownContent) {
+						this.agentDropdownContent.classList.remove("show");
+					}
+					await this.quickSwitchToAgent(agent);
+				});
+			}
+
+			// Divider
+			this.agentDropdownContent.createEl("div", { cls: "letta-dropdown-divider" });
+		}
+
+		// "Browse All Agents" option
+		const allAgentsItem = this.agentDropdownContent.createEl("div", {
+			cls: "letta-dropdown-item letta-dropdown-item-browse",
+		});
+		allAgentsItem.createEl("span", { text: "Browse All Agents..." });
+		allAgentsItem.addEventListener("click", () => {
+			if (this.agentDropdownContent) {
+				this.agentDropdownContent.classList.remove("show");
+			}
+			this.openAgentSwitcher();
+		});
+	}
+
+	// Quick switch to a recent agent
+	async quickSwitchToAgent(recent: RecentAgent): Promise<void> {
+		try {
+			new Notice(`Switching to ${recent.name}...`);
+
+			// Verify agent still exists
+			const agent = await this.plugin.makeRequest(`/v1/agents/${recent.id}`);
+
+			if (!agent) {
+				// Remove from recent list
+				this.plugin.settings.recentAgents = this.plugin.settings.recentAgents.filter(
+					(a) => a.id !== recent.id
+				);
+				await this.plugin.saveSettings();
+				new Notice(`Agent "${recent.name}" no longer exists`);
+				return;
+			}
+
+			// Build project object if we have a slug
+			const project = recent.projectSlug ? { slug: recent.projectSlug } : undefined;
+
+			// Use existing switchToAgent logic
+			await this.switchToAgent(agent, project);
+		} catch (error) {
+			console.error("[Letta Plugin] Quick switch failed:", error);
+			new Notice(`Failed to switch to ${recent.name}`);
+		}
+	}
+
 	async openAgentSwitcher() {
 		if (!this.plugin.settings.lettaApiKey) {
 			new Notice("Please configure your Letta API key first");
@@ -7340,8 +8484,9 @@ class LettaChatView extends ItemView {
 				`[Letta Plugin] Switching to agent: ${agent.name} (ID: ${agent.id})`,
 			);
 
-			// Clear current chat without triggering updateChatStatus
+			// Clear current chat and load more button
 			this.chatContainer.empty();
+			this.loadMoreButton = null;
 
 			// CRITICAL: Update both agent name AND agent ID in settings
 			this.plugin.settings.agentName = agent.name;
@@ -7351,6 +8496,12 @@ class LettaChatView extends ItemView {
 				this.plugin.settings.lettaProjectSlug = project.slug;
 			}
 			await this.plugin.saveSettings();
+
+			// Track in recent agents for quick switching
+			await this.plugin.trackRecentAgent(
+				{ id: agent.id, name: agent.name },
+				project?.slug
+			);
 
 			// Update plugin agent reference with consistent format (like setupAgent does)
 			this.plugin.agent = {
@@ -7380,15 +8531,20 @@ class LettaChatView extends ItemView {
 			// Update UI - agent name
 			this.updateAgentNameDisplay();
 
-			// Update chat status without loading historical messages for fresh start
+			// Update chat status without loading historical messages initially
 			await this.updateChatStatus(false);
 
-			// Show success message for fresh conversation
-			await this.addMessage(
-				"assistant",
-				`Started fresh conversation with **${agent.name}**${project ? ` (Project: ${project.name})` : ""}`,
-				"System",
-			);
+			// Load conversation history if enabled
+			if (this.plugin.settings.loadHistoryOnSwitch) {
+				await this.loadHistoricalMessages();
+			} else {
+				// Show welcome message for fresh conversation
+				await this.addMessage(
+					"assistant",
+					`Switched to **${agent.name}**${project ? ` (Project: ${project.name})` : ""}. Conversation history available.`,
+					"System",
+				);
+			}
 
 			new Notice(`Switched to agent: ${agent.name}`);
 		} catch (error) {
@@ -8518,10 +9674,139 @@ class LettaMemoryView extends ItemView {
 
 
 
+class VaultOperationApprovalModal extends Modal {
+	plugin: LettaPlugin;
+	operation: "write" | "modify" | "delete";
+	details: any;
+	callback: (approved: boolean, trustSession: boolean) => void;
+	trustSessionCheckbox: HTMLInputElement | null = null;
+
+	constructor(
+		app: App,
+		plugin: LettaPlugin,
+		operation: "write" | "modify" | "delete",
+		details: any,
+		callback: (approved: boolean, trustSession: boolean) => void
+	) {
+		super(app);
+		this.plugin = plugin;
+		this.operation = operation;
+		this.details = details;
+		this.callback = callback;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass("letta-vault-approval-modal");
+
+		// Title based on operation
+		const titles: Record<string, string> = {
+			write: "Approve File Write?",
+			modify: "Approve File Modification?",
+			delete: "Approve File Deletion?",
+		};
+		contentEl.createEl("h2", { text: titles[this.operation] });
+
+		// Warning icon and message
+		const warningDiv = contentEl.createEl("div", { cls: "letta-approval-warning" });
+		const warningIcon = this.operation === "delete" ? "⚠️" : "📝";
+		warningDiv.createEl("span", { cls: "letta-approval-icon", text: warningIcon });
+
+		const operationDescriptions: Record<string, string> = {
+			write: "Your Letta agent wants to create or overwrite a file:",
+			modify: "Your Letta agent wants to modify a file:",
+			delete: "Your Letta agent wants to delete a file:",
+		};
+		warningDiv.createEl("span", { text: operationDescriptions[this.operation] });
+
+		// File path
+		const pathDiv = contentEl.createEl("div", { cls: "letta-approval-path" });
+		pathDiv.createEl("strong", { text: "Path: " });
+		pathDiv.createEl("code", { text: this.details.path || this.details.file_path || "Unknown" });
+
+		// Content preview for write/modify operations
+		if (this.operation === "write" && this.details.content) {
+			const contentDiv = contentEl.createEl("div", { cls: "letta-approval-content" });
+			contentDiv.createEl("strong", { text: "Content to write:" });
+			const preview = contentDiv.createEl("pre", { cls: "letta-approval-preview" });
+			const contentText = this.details.content.length > 500
+				? this.details.content.substring(0, 500) + "..."
+				: this.details.content;
+			preview.createEl("code", { text: contentText });
+		}
+
+		if (this.operation === "modify") {
+			const modifyDiv = contentEl.createEl("div", { cls: "letta-approval-content" });
+			modifyDiv.createEl("strong", { text: "Modification details:" });
+
+			const detailsList = modifyDiv.createEl("ul");
+			if (this.details.mode) {
+				detailsList.createEl("li", { text: `Mode: ${this.details.mode}` });
+			}
+			if (this.details.section) {
+				detailsList.createEl("li", { text: `Section: ${this.details.section}` });
+			}
+			if (this.details.content) {
+				const contentPreview = this.details.content.length > 200
+					? this.details.content.substring(0, 200) + "..."
+					: this.details.content;
+				const contentLi = detailsList.createEl("li");
+				contentLi.createEl("span", { text: "Content: " });
+				contentLi.createEl("code", { text: contentPreview });
+			}
+		}
+
+		if (this.operation === "delete") {
+			const deleteWarning = contentEl.createEl("div", { cls: "letta-approval-delete-warning" });
+			deleteWarning.createEl("strong", { text: "This action cannot be undone!" });
+			deleteWarning.createEl("p", { text: "The file will be moved to Obsidian's trash folder." });
+		}
+
+		// Trust session checkbox
+		const checkboxDiv = contentEl.createEl("div", { cls: "letta-approval-checkbox" });
+		this.trustSessionCheckbox = checkboxDiv.createEl("input", { type: "checkbox" });
+		this.trustSessionCheckbox.id = "trust-session-checkbox";
+		const checkboxLabel = checkboxDiv.createEl("label");
+		checkboxLabel.setAttribute("for", "trust-session-checkbox");
+		checkboxLabel.setText("Trust this agent for the rest of this session (no more prompts for write/modify/delete)");
+
+		// Button container
+		const buttonContainer = contentEl.createEl("div", { cls: "modal-button-container" });
+
+		const approveButton = buttonContainer.createEl("button", {
+			text: this.operation === "delete" ? "Delete File" : "Approve",
+			cls: this.operation === "delete" ? "mod-warning" : "mod-cta",
+		});
+		approveButton.onclick = () => {
+			const trustSession = this.trustSessionCheckbox?.checked || false;
+			this.callback(true, trustSession);
+			this.close();
+		};
+
+		const denyButton = buttonContainer.createEl("button", {
+			text: "Deny",
+		});
+		denyButton.onclick = () => {
+			this.callback(false, false);
+			this.close();
+		};
+
+		// Focus deny button for safety
+		denyButton.focus();
+	}
+
+	onClose() {
+		const { contentEl } = this;
+		contentEl.empty();
+	}
+}
+
+
 class ToolRegistrationConsentModal extends Modal {
 	plugin: LettaPlugin;
 	resolve: (consent: boolean) => void;
-	
+
 	constructor(app: App, plugin: LettaPlugin) {
 		super(app);
 		this.plugin = plugin;
@@ -9561,6 +10846,124 @@ class LettaSettingTab extends PluginSettingTab {
 					})
 			);
 
+
+		// Multi-Agent Settings
+		containerEl.createEl("h3", { text: "Multi-Agent Settings" });
+
+		new Setting(containerEl)
+			.setName("Load History on Agent Switch")
+			.setDesc(
+				"Automatically load conversation history when switching to a different agent"
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.loadHistoryOnSwitch)
+					.onChange(async (value) => {
+						this.plugin.settings.loadHistoryOnSwitch = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("History Page Size")
+			.setDesc(
+				"Number of messages to load at a time when loading conversation history"
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("50")
+					.setValue(this.plugin.settings.historyPageSize.toString())
+					.onChange(async (value) => {
+						const numValue = parseInt(value, 10);
+						if (!isNaN(numValue) && numValue > 0 && numValue <= 200) {
+							this.plugin.settings.historyPageSize = numValue;
+							await this.plugin.saveSettings();
+						}
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Clear Recent Agents")
+			.setDesc(
+				"Clear the list of recently used agents (currently: " +
+				this.plugin.settings.recentAgents.length + " agents)"
+			)
+			.addButton((button) =>
+				button
+					.setButtonText("Clear")
+					.onClick(async () => {
+						this.plugin.settings.recentAgents = [];
+						await this.plugin.saveSettings();
+						new Notice("Recent agents list cleared");
+						this.display(); // Refresh settings page
+					}),
+			);
+
+		// Vault Tools Settings
+		containerEl.createEl("h3", { text: "Vault Tools" });
+
+		new Setting(containerEl)
+			.setName("Enable Vault Tools")
+			.setDesc(
+				"Allow agents to read, search, and manipulate files in your vault using specialized tools"
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.enableVaultTools)
+					.onChange(async (value) => {
+						this.plugin.settings.enableVaultTools = value;
+						await this.plugin.saveSettings();
+
+						// Register/unregister tools if agent is available
+						if (this.plugin.agent && value) {
+							await this.plugin.registerObsidianTools();
+							new Notice("Vault tools enabled - agent can now interact with your vault");
+						} else if (!value) {
+							new Notice("Vault tools disabled");
+						}
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Blocked Folders")
+			.setDesc(
+				"Comma-separated list of folders that agents cannot access (default: .obsidian, .trash)"
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder(".obsidian, .trash, .git")
+					.setValue(this.plugin.settings.blockedFolders.join(", "))
+					.onChange(async (value) => {
+						this.plugin.settings.blockedFolders = value
+							.split(",")
+							.map((f) => f.trim())
+							.filter((f) => f.length > 0);
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		const approvalDesc = this.plugin.settings.vaultToolsApprovedThisSession
+			? "Currently trusted for this session (writes/deletes allowed without prompts)"
+			: "First write/delete operation will require your approval";
+
+		new Setting(containerEl)
+			.setName("Session Trust Status")
+			.setDesc(approvalDesc)
+			.addButton((button) =>
+				button
+					.setButtonText(
+						this.plugin.settings.vaultToolsApprovedThisSession
+							? "Revoke Trust"
+							: "Status OK"
+					)
+					.setDisabled(!this.plugin.settings.vaultToolsApprovedThisSession)
+					.onClick(async () => {
+						this.plugin.settings.vaultToolsApprovedThisSession = false;
+						await this.plugin.saveSettings();
+						new Notice("Session trust revoked - next write/delete will require approval");
+						this.display(); // Refresh settings page
+					}),
+			);
 
 		// Actions
 		containerEl.createEl("h3", { text: "Actions" });
