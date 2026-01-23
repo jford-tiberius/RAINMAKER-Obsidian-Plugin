@@ -1,0 +1,417 @@
+0 verbose cli C:\Program Files\nodejs\node.exe C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js
+1 info using npm@10.9.3
+2 info using node@v22.19.0
+3 silly config load:file:C:\Program Files\nodejs\node_modules\npm\npmrc
+4 silly config load:file:H:\My Drive\rainmaker-obsidian\.npmrc
+5 silly config load:file:C:\Users\james\.npmrc
+6 silly config load:file:C:\Users\james\AppData\Roaming\npm\etc\npmrc
+7 verbose title npm exec tsc --noEmit --skipLibCheck
+8 verbose argv "exec" "--" "tsc" "--noEmit" "--skipLibCheck"
+9 verbose logfile logs-max:10 dir:H:\My Drive\rainmaker-obsidian\%USERPROFILE%\npm-cache-new\_logs\2026-01-22T19_34_22_817Z-
+10 verbose logfile H:\My Drive\rainmaker-obsidian\%USERPROFILE%\npm-cache-new\_logs\2026-01-22T19_34_22_817Z-debug-0.log
+11 silly logfile done cleaning log files
+12 silly packumentCache heap:4345298944 maxSize:1086324736 maxEntrySize:543162368
+13 http fetch GET 200 https://registry.npmjs.org/npm 284ms
+14 http fetch GET 200 https://registry.npmjs.org/tsc 368ms (cache miss)
+15 silly packumentCache heap:4345298944 maxSize:1086324736 maxEntrySize:543162368
+16 silly packumentCache heap:4345298944 maxSize:1086324736 maxEntrySize:543162368
+17 warn exec The following package was not found and will be installed: tsc@2.0.4
+18 silly idealTree buildDeps
+19 silly fetch manifest tsc@2.0.4
+20 silly packumentCache full:https://registry.npmjs.org/tsc cache-miss
+21 http fetch GET 200 https://registry.npmjs.org/tsc 189ms (cache miss)
+22 silly packumentCache full:https://registry.npmjs.org/tsc set size:undefined disposed:false
+23 silly placeDep ROOT tsc@2.0.4 OK for:  want: 2.0.4
+24 silly reify moves {}
+25 silly audit bulk request { tsc: [ '2.0.4' ] }
+26 http cache tsc@https://registry.npmjs.org/tsc/-/tsc-2.0.4.tgz 1ms (cache hit)
+27 silly tarball no local data for tsc@https://registry.npmjs.org/tsc/-/tsc-2.0.4.tgz. Extracting by manifest.
+28 warn tar TAR_ENTRY_ERROR UNKNOWN: unknown error, write
+29 silly tar TAR_ENTRY_ERROR UNKNOWN: unknown error, write [Error: UNKNOWN: unknown error, write] {
+29 silly tar   errno: -4094,
+29 silly tar   code: 'UNKNOWN',
+29 silly tar   syscall: 'write',
+29 silly tar   entry: ReadEntry {
+29 silly tar     _events: [Object: null prototype] {},
+29 silly tar     _eventsCount: 0,
+29 silly tar     _maxListeners: undefined,
+29 silly tar     writable: false,
+29 silly tar     readable: false,
+29 silly tar     extended: null,
+29 silly tar     globalExtended: null,
+29 silly tar     header: Header {
+29 silly tar       cksumValid: true,
+29 silly tar       needPax: false,
+29 silly tar       nullBlock: false,
+29 silly tar       block: null,
+29 silly tar       path: 'package/bin/tsc',
+29 silly tar       mode: 420,
+29 silly tar       uid: null,
+29 silly tar       gid: null,
+29 silly tar       size: 40,
+29 silly tar       mtime: 1985-10-26T08:15:00.000Z,
+29 silly tar       cksum: 4447,
+29 silly tar       linkpath: '',
+29 silly tar       uname: '',
+29 silly tar       gname: '',
+29 silly tar       devmaj: 0,
+29 silly tar       devmin: 0,
+29 silly tar       atime: null,
+29 silly tar       ctime: null,
+29 silly tar       [Symbol(type)]: '0'
+29 silly tar     },
+29 silly tar     startBlockSize: 512,
+29 silly tar     blockRemain: 0,
+29 silly tar     remain: 0,
+29 silly tar     type: 'File',
+29 silly tar     meta: false,
+29 silly tar     ignore: false,
+29 silly tar     path: 'bin/tsc',
+29 silly tar     mode: 438,
+29 silly tar     uid: null,
+29 silly tar     gid: null,
+29 silly tar     uname: '',
+29 silly tar     gname: '',
+29 silly tar     size: 40,
+29 silly tar     mtime: 1985-10-26T08:15:00.000Z,
+29 silly tar     atime: null,
+29 silly tar     ctime: null,
+29 silly tar     linkpath: '',
+29 silly tar     absolute: 'H:/My Drive/rainmaker-obsidian/%USERPROFILE%/npm-cache-new/_npx/1d6e82a4126006c4/node_modules/tsc/bin/tsc',
+29 silly tar     [Symbol(shapeMode)]: false,
+29 silly tar     [Symbol(kCapture)]: false,
+29 silly tar     [Symbol(flowing)]: false,
+29 silly tar     [Symbol(paused)]: true,
+29 silly tar     [Symbol(pipes)]: [ [Pipe] ],
+29 silly tar     [Symbol(buffer)]: [],
+29 silly tar     [Symbol(objectMode)]: false,
+29 silly tar     [Symbol(encoding)]: null,
+29 silly tar     [Symbol(async)]: false,
+29 silly tar     [Symbol(decoder)]: null,
+29 silly tar     [Symbol(EOF)]: true,
+29 silly tar     [Symbol(emittedEnd)]: true,
+29 silly tar     [Symbol(emittingEnd)]: false,
+29 silly tar     [Symbol(closed)]: false,
+29 silly tar     [Symbol(emittedError)]: null,
+29 silly tar     [Symbol(bufferLength)]: 0,
+29 silly tar     [Symbol(destroyed)]: false,
+29 silly tar     [Symbol(signal)]: undefined,
+29 silly tar     [Symbol(aborted)]: false
+29 silly tar   },
+29 silly tar   cwd: 'H:/My Drive/rainmaker-obsidian/%USERPROFILE%/npm-cache-new/_npx/1d6e82a4126006c4/node_modules/tsc',
+29 silly tar   tarCode: 'TAR_ENTRY_ERROR'
+29 silly tar }
+30 http fetch POST 200 https://registry.npmjs.org/-/npm/v1/security/advisories/bulk 117ms
+31 silly audit report {}
+32 warn tar TAR_ENTRY_ERROR UNKNOWN: unknown error, write
+33 silly tar TAR_ENTRY_ERROR UNKNOWN: unknown error, write [Error: UNKNOWN: unknown error, write] {
+33 silly tar   errno: -4094,
+33 silly tar   code: 'UNKNOWN',
+33 silly tar   syscall: 'write',
+33 silly tar   entry: ReadEntry {
+33 silly tar     _events: [Object: null prototype] {},
+33 silly tar     _eventsCount: 0,
+33 silly tar     _maxListeners: undefined,
+33 silly tar     writable: false,
+33 silly tar     readable: false,
+33 silly tar     extended: null,
+33 silly tar     globalExtended: null,
+33 silly tar     header: Header {
+33 silly tar       cksumValid: true,
+33 silly tar       needPax: false,
+33 silly tar       nullBlock: false,
+33 silly tar       block: null,
+33 silly tar       path: 'package/bin/tsc.js',
+33 silly tar       mode: 420,
+33 silly tar       uid: null,
+33 silly tar       gid: null,
+33 silly tar       size: 1591,
+33 silly tar       mtime: 1985-10-26T08:15:00.000Z,
+33 silly tar       cksum: 4725,
+33 silly tar       linkpath: '',
+33 silly tar       uname: '',
+33 silly tar       gname: '',
+33 silly tar       devmaj: 0,
+33 silly tar       devmin: 0,
+33 silly tar       atime: null,
+33 silly tar       ctime: null,
+33 silly tar       [Symbol(type)]: '0'
+33 silly tar     },
+33 silly tar     startBlockSize: 2048,
+33 silly tar     blockRemain: 0,
+33 silly tar     remain: 0,
+33 silly tar     type: 'File',
+33 silly tar     meta: false,
+33 silly tar     ignore: false,
+33 silly tar     path: 'bin/tsc.js',
+33 silly tar     mode: 438,
+33 silly tar     uid: null,
+33 silly tar     gid: null,
+33 silly tar     uname: '',
+33 silly tar     gname: '',
+33 silly tar     size: 1591,
+33 silly tar     mtime: 1985-10-26T08:15:00.000Z,
+33 silly tar     atime: null,
+33 silly tar     ctime: null,
+33 silly tar     linkpath: '',
+33 silly tar     absolute: 'H:/My Drive/rainmaker-obsidian/%USERPROFILE%/npm-cache-new/_npx/1d6e82a4126006c4/node_modules/tsc/bin/tsc.js',
+33 silly tar     [Symbol(shapeMode)]: false,
+33 silly tar     [Symbol(kCapture)]: false,
+33 silly tar     [Symbol(flowing)]: false,
+33 silly tar     [Symbol(paused)]: true,
+33 silly tar     [Symbol(pipes)]: [ [Pipe] ],
+33 silly tar     [Symbol(buffer)]: [],
+33 silly tar     [Symbol(objectMode)]: false,
+33 silly tar     [Symbol(encoding)]: null,
+33 silly tar     [Symbol(async)]: false,
+33 silly tar     [Symbol(decoder)]: null,
+33 silly tar     [Symbol(EOF)]: true,
+33 silly tar     [Symbol(emittedEnd)]: true,
+33 silly tar     [Symbol(emittingEnd)]: false,
+33 silly tar     [Symbol(closed)]: false,
+33 silly tar     [Symbol(emittedError)]: null,
+33 silly tar     [Symbol(bufferLength)]: 0,
+33 silly tar     [Symbol(destroyed)]: false,
+33 silly tar     [Symbol(signal)]: undefined,
+33 silly tar     [Symbol(aborted)]: false
+33 silly tar   },
+33 silly tar   cwd: 'H:/My Drive/rainmaker-obsidian/%USERPROFILE%/npm-cache-new/_npx/1d6e82a4126006c4/node_modules/tsc',
+33 silly tar   tarCode: 'TAR_ENTRY_ERROR'
+33 silly tar }
+34 warn tar TAR_ENTRY_ERROR UNKNOWN: unknown error, write
+35 silly tar TAR_ENTRY_ERROR UNKNOWN: unknown error, write [Error: UNKNOWN: unknown error, write] {
+35 silly tar   errno: -4094,
+35 silly tar   code: 'UNKNOWN',
+35 silly tar   syscall: 'write',
+35 silly tar   entry: ReadEntry {
+35 silly tar     _events: [Object: null prototype] {},
+35 silly tar     _eventsCount: 0,
+35 silly tar     _maxListeners: undefined,
+35 silly tar     writable: false,
+35 silly tar     readable: false,
+35 silly tar     extended: null,
+35 silly tar     globalExtended: null,
+35 silly tar     header: Header {
+35 silly tar       cksumValid: true,
+35 silly tar       needPax: false,
+35 silly tar       nullBlock: false,
+35 silly tar       block: null,
+35 silly tar       path: 'package/package.json',
+35 silly tar       mode: 420,
+35 silly tar       uid: null,
+35 silly tar       gid: null,
+35 silly tar       size: 486,
+35 silly tar       mtime: 1985-10-26T08:15:00.000Z,
+35 silly tar       cksum: 4973,
+35 silly tar       linkpath: '',
+35 silly tar       uname: '',
+35 silly tar       gname: '',
+35 silly tar       devmaj: 0,
+35 silly tar       devmin: 0,
+35 silly tar       atime: null,
+35 silly tar       ctime: null,
+35 silly tar       [Symbol(type)]: '0'
+35 silly tar     },
+35 silly tar     startBlockSize: 512,
+35 silly tar     blockRemain: 0,
+35 silly tar     remain: 0,
+35 silly tar     type: 'File',
+35 silly tar     meta: false,
+35 silly tar     ignore: false,
+35 silly tar     path: 'package.json',
+35 silly tar     mode: 438,
+35 silly tar     uid: null,
+35 silly tar     gid: null,
+35 silly tar     uname: '',
+35 silly tar     gname: '',
+35 silly tar     size: 486,
+35 silly tar     mtime: 1985-10-26T08:15:00.000Z,
+35 silly tar     atime: null,
+35 silly tar     ctime: null,
+35 silly tar     linkpath: '',
+35 silly tar     absolute: 'H:/My Drive/rainmaker-obsidian/%USERPROFILE%/npm-cache-new/_npx/1d6e82a4126006c4/node_modules/tsc/package.json',
+35 silly tar     [Symbol(shapeMode)]: false,
+35 silly tar     [Symbol(kCapture)]: false,
+35 silly tar     [Symbol(flowing)]: false,
+35 silly tar     [Symbol(paused)]: true,
+35 silly tar     [Symbol(pipes)]: [ [Pipe] ],
+35 silly tar     [Symbol(buffer)]: [],
+35 silly tar     [Symbol(objectMode)]: false,
+35 silly tar     [Symbol(encoding)]: null,
+35 silly tar     [Symbol(async)]: false,
+35 silly tar     [Symbol(decoder)]: null,
+35 silly tar     [Symbol(EOF)]: true,
+35 silly tar     [Symbol(emittedEnd)]: true,
+35 silly tar     [Symbol(emittingEnd)]: false,
+35 silly tar     [Symbol(closed)]: false,
+35 silly tar     [Symbol(emittedError)]: null,
+35 silly tar     [Symbol(bufferLength)]: 0,
+35 silly tar     [Symbol(destroyed)]: false,
+35 silly tar     [Symbol(signal)]: undefined,
+35 silly tar     [Symbol(aborted)]: false
+35 silly tar   },
+35 silly tar   cwd: 'H:/My Drive/rainmaker-obsidian/%USERPROFILE%/npm-cache-new/_npx/1d6e82a4126006c4/node_modules/tsc',
+35 silly tar   tarCode: 'TAR_ENTRY_ERROR'
+35 silly tar }
+36 warn tar TAR_ENTRY_ERROR UNKNOWN: unknown error, write
+37 silly tar TAR_ENTRY_ERROR UNKNOWN: unknown error, write [Error: UNKNOWN: unknown error, write] {
+37 silly tar   errno: -4094,
+37 silly tar   code: 'UNKNOWN',
+37 silly tar   syscall: 'write',
+37 silly tar   entry: ReadEntry {
+37 silly tar     _events: [Object: null prototype] {},
+37 silly tar     _eventsCount: 0,
+37 silly tar     _maxListeners: undefined,
+37 silly tar     writable: false,
+37 silly tar     readable: false,
+37 silly tar     extended: null,
+37 silly tar     globalExtended: null,
+37 silly tar     header: Header {
+37 silly tar       cksumValid: true,
+37 silly tar       needPax: false,
+37 silly tar       nullBlock: false,
+37 silly tar       block: null,
+37 silly tar       path: 'package/CONTRIBUTING.md',
+37 silly tar       mode: 420,
+37 silly tar       uid: null,
+37 silly tar       gid: null,
+37 silly tar       size: 25,
+37 silly tar       mtime: 1985-10-26T08:15:00.000Z,
+37 silly tar       cksum: 4931,
+37 silly tar       linkpath: '',
+37 silly tar       uname: '',
+37 silly tar       gname: '',
+37 silly tar       devmaj: 0,
+37 silly tar       devmin: 0,
+37 silly tar       atime: null,
+37 silly tar       ctime: null,
+37 silly tar       [Symbol(type)]: '0'
+37 silly tar     },
+37 silly tar     startBlockSize: 512,
+37 silly tar     blockRemain: 0,
+37 silly tar     remain: 0,
+37 silly tar     type: 'File',
+37 silly tar     meta: false,
+37 silly tar     ignore: false,
+37 silly tar     path: 'CONTRIBUTING.md',
+37 silly tar     mode: 438,
+37 silly tar     uid: null,
+37 silly tar     gid: null,
+37 silly tar     uname: '',
+37 silly tar     gname: '',
+37 silly tar     size: 25,
+37 silly tar     mtime: 1985-10-26T08:15:00.000Z,
+37 silly tar     atime: null,
+37 silly tar     ctime: null,
+37 silly tar     linkpath: '',
+37 silly tar     absolute: 'H:/My Drive/rainmaker-obsidian/%USERPROFILE%/npm-cache-new/_npx/1d6e82a4126006c4/node_modules/tsc/CONTRIBUTING.md',
+37 silly tar     [Symbol(shapeMode)]: false,
+37 silly tar     [Symbol(kCapture)]: false,
+37 silly tar     [Symbol(flowing)]: false,
+37 silly tar     [Symbol(paused)]: true,
+37 silly tar     [Symbol(pipes)]: [ [Pipe] ],
+37 silly tar     [Symbol(buffer)]: [],
+37 silly tar     [Symbol(objectMode)]: false,
+37 silly tar     [Symbol(encoding)]: null,
+37 silly tar     [Symbol(async)]: false,
+37 silly tar     [Symbol(decoder)]: null,
+37 silly tar     [Symbol(EOF)]: true,
+37 silly tar     [Symbol(emittedEnd)]: true,
+37 silly tar     [Symbol(emittingEnd)]: false,
+37 silly tar     [Symbol(closed)]: false,
+37 silly tar     [Symbol(emittedError)]: null,
+37 silly tar     [Symbol(bufferLength)]: 0,
+37 silly tar     [Symbol(destroyed)]: false,
+37 silly tar     [Symbol(signal)]: undefined,
+37 silly tar     [Symbol(aborted)]: false
+37 silly tar   },
+37 silly tar   cwd: 'H:/My Drive/rainmaker-obsidian/%USERPROFILE%/npm-cache-new/_npx/1d6e82a4126006c4/node_modules/tsc',
+37 silly tar   tarCode: 'TAR_ENTRY_ERROR'
+37 silly tar }
+38 warn tar TAR_ENTRY_ERROR UNKNOWN: unknown error, write
+39 silly tar TAR_ENTRY_ERROR UNKNOWN: unknown error, write [Error: UNKNOWN: unknown error, write] {
+39 silly tar   errno: -4094,
+39 silly tar   code: 'UNKNOWN',
+39 silly tar   syscall: 'write',
+39 silly tar   entry: ReadEntry {
+39 silly tar     _events: [Object: null prototype] {},
+39 silly tar     _eventsCount: 0,
+39 silly tar     _maxListeners: undefined,
+39 silly tar     writable: false,
+39 silly tar     readable: false,
+39 silly tar     extended: null,
+39 silly tar     globalExtended: null,
+39 silly tar     header: Header {
+39 silly tar       cksumValid: true,
+39 silly tar       needPax: false,
+39 silly tar       nullBlock: false,
+39 silly tar       block: null,
+39 silly tar       path: 'package/README.md',
+39 silly tar       mode: 420,
+39 silly tar       uid: null,
+39 silly tar       gid: null,
+39 silly tar       size: 118,
+39 silly tar       mtime: 1985-10-26T08:15:00.000Z,
+39 silly tar       cksum: 4450,
+39 silly tar       linkpath: '',
+39 silly tar       uname: '',
+39 silly tar       gname: '',
+39 silly tar       devmaj: 0,
+39 silly tar       devmin: 0,
+39 silly tar       atime: null,
+39 silly tar       ctime: null,
+39 silly tar       [Symbol(type)]: '0'
+39 silly tar     },
+39 silly tar     startBlockSize: 512,
+39 silly tar     blockRemain: 0,
+39 silly tar     remain: 0,
+39 silly tar     type: 'File',
+39 silly tar     meta: false,
+39 silly tar     ignore: false,
+39 silly tar     path: 'README.md',
+39 silly tar     mode: 438,
+39 silly tar     uid: null,
+39 silly tar     gid: null,
+39 silly tar     uname: '',
+39 silly tar     gname: '',
+39 silly tar     size: 118,
+39 silly tar     mtime: 1985-10-26T08:15:00.000Z,
+39 silly tar     atime: null,
+39 silly tar     ctime: null,
+39 silly tar     linkpath: '',
+39 silly tar     absolute: 'H:/My Drive/rainmaker-obsidian/%USERPROFILE%/npm-cache-new/_npx/1d6e82a4126006c4/node_modules/tsc/README.md',
+39 silly tar     [Symbol(shapeMode)]: false,
+39 silly tar     [Symbol(kCapture)]: false,
+39 silly tar     [Symbol(flowing)]: false,
+39 silly tar     [Symbol(paused)]: true,
+39 silly tar     [Symbol(pipes)]: [ [Pipe] ],
+39 silly tar     [Symbol(buffer)]: [],
+39 silly tar     [Symbol(objectMode)]: false,
+39 silly tar     [Symbol(encoding)]: null,
+39 silly tar     [Symbol(async)]: false,
+39 silly tar     [Symbol(decoder)]: null,
+39 silly tar     [Symbol(EOF)]: true,
+39 silly tar     [Symbol(emittedEnd)]: true,
+39 silly tar     [Symbol(emittingEnd)]: false,
+39 silly tar     [Symbol(closed)]: false,
+39 silly tar     [Symbol(emittedError)]: null,
+39 silly tar     [Symbol(bufferLength)]: 0,
+39 silly tar     [Symbol(destroyed)]: false,
+39 silly tar     [Symbol(signal)]: undefined,
+39 silly tar     [Symbol(aborted)]: false
+39 silly tar   },
+39 silly tar   cwd: 'H:/My Drive/rainmaker-obsidian/%USERPROFILE%/npm-cache-new/_npx/1d6e82a4126006c4/node_modules/tsc',
+39 silly tar   tarCode: 'TAR_ENTRY_ERROR'
+39 silly tar }
+40 http fetch GET 200 https://registry.npmjs.org/tsc/-/tsc-2.0.4.tgz 222ms (cache miss)
+41 verbose cwd H:\My Drive\rainmaker-obsidian
+42 verbose os Windows_NT 10.0.26200
+43 verbose node v22.19.0
+44 verbose npm  v10.9.3
+45 notice
+45 notice New major version of npm available! 10.9.3 -> 11.8.0
+45 notice Changelog: https://github.com/npm/cli/releases/tag/v11.8.0
+45 notice To update run: npm install -g npm@11.8.0
+45 notice  { force: true, [Symbol(proc-log.meta)]: true }
+46 verbose exit 0
+47 info ok
