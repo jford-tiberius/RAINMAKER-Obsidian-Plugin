@@ -17,6 +17,52 @@ import {
 } from "obsidian";
 import { LettaClient, LettaError } from "@letta-ai/letta-client";
 
+// Store original fetch for non-Letta requests
+const originalFetch = window.fetch.bind(window);
+
+// Custom fetch that uses Obsidian's requestUrl for Letta API calls (bypasses CORS)
+function createObsidianFetch(lettaBaseUrl: string): typeof fetch {
+	return async function obsidianFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+		const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+
+		// Only intercept Letta API calls
+		if (!url.includes('letta.com') && !url.startsWith(lettaBaseUrl)) {
+			return originalFetch(input, init);
+		}
+
+		try {
+			const headers: Record<string, string> = {};
+			if (init?.headers) {
+				if (init.headers instanceof Headers) {
+					init.headers.forEach((value, key) => { headers[key] = value; });
+				} else if (Array.isArray(init.headers)) {
+					init.headers.forEach(([key, value]) => { headers[key] = value; });
+				} else {
+					Object.assign(headers, init.headers);
+				}
+			}
+
+			const response = await requestUrl({
+				url,
+				method: (init?.method as string) || 'GET',
+				headers,
+				body: init?.body as string | undefined,
+				throw: false,
+			});
+
+			// Create a Response-like object
+			return new Response(response.text, {
+				status: response.status,
+				statusText: response.status === 200 ? 'OK' : 'Error',
+				headers: new Headers(response.headers),
+			});
+		} catch (error) {
+			console.error('[Letta Plugin] obsidianFetch error:', error);
+			throw error;
+		}
+	};
+}
+
 export const LETTA_CHAT_VIEW_TYPE = "letta-chat-view";
 export const LETTA_MEMORY_VIEW_TYPE = "letta-memory-view";
 
@@ -214,6 +260,9 @@ export default class LettaPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
+		// Patch global fetch to use Obsidian's requestUrl for Letta API calls (bypasses CORS)
+		this.patchGlobalFetch();
+
 		// Reset session-based approvals on plugin load
 		this.resetSessionApprovals();
 
@@ -341,6 +390,10 @@ export default class LettaPlugin extends Plugin {
 			clearTimeout(this.focusUpdateTimer);
 		}
 		this.agent = null;
+
+		// Restore original fetch when plugin unloads
+		(window as any).fetch = originalFetch;
+		console.log("[Letta Plugin] Restored original fetch");
 	}
 
 	async loadSettings() {
@@ -395,6 +448,16 @@ export default class LettaPlugin extends Plugin {
 		);
 	}
 
+	// Patch global fetch to use Obsidian's requestUrl for Letta API calls
+	// This is necessary because the LettaClient uses fetch internally,
+	// and CORS blocks requests from app://obsidian.md to api.letta.com
+	private patchGlobalFetch() {
+		if (this.settings.lettaBaseUrl) {
+			console.log("[Letta Plugin] Patching global fetch for CORS bypass");
+			(window as any).fetch = createObsidianFetch(this.settings.lettaBaseUrl);
+		}
+	}
+
 	private initializeClient() {
 		try {
 			// Only initialize if we have a base URL
@@ -402,6 +465,9 @@ export default class LettaPlugin extends Plugin {
 				this.client = null;
 				return;
 			}
+
+			// Re-patch fetch in case base URL changed
+			this.patchGlobalFetch();
 
 			// Initialize with token and base URL from settings
 			const config: any = {
@@ -787,9 +853,10 @@ export default class LettaPlugin extends Plugin {
 			progressCallback?.(progressMessage);
 
 			// Test connection by trying to list agents (this endpoint should exist)
-			if (!this.client) throw new Error("Client not initialized");
+			// Use makeRequest instead of client.agents.list() to avoid CORS issues
+			// (makeRequest uses Obsidian's requestUrl which bypasses CORS)
 			console.log("[Letta Plugin] Testing connection by listing agents...");
-			await this.client.agents.list();
+			await this.makeRequest("/v1/agents/");
 			console.log("[Letta Plugin] Connection test successful");
 
 			// Try to setup agent if one is configured
