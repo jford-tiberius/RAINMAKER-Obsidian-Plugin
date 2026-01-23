@@ -216,6 +216,30 @@
     opacity: 0.7;
 }
 
+/* Focus mode toggle */
+.letta-focus-toggle {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75em;
+    font-weight: 500;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.letta-focus-toggle:hover {
+    background: var(--background-modifier-hover);
+    border-color: var(--background-modifier-border-hover);
+}
+
+.letta-focus-toggle.letta-focus-active {
+    color: var(--text-accent);
+    background: rgba(var(--color-accent-rgb), 0.15);
+    border-color: var(--interactive-accent);
+}
+
 /* Overflow menu (⋮) */
 .letta-overflow-menu {
     position: relative;

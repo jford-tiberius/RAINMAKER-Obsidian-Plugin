@@ -2076,6 +2076,8 @@ class LettaChatView extends ItemView {
 	loadMoreButton: HTMLElement | null = null;
 	// Vault tools status indicator
 	vaultToolsIndicator: HTMLElement | null = null;
+	// Focus mode toggle button
+	focusToggle: HTMLButtonElement | null = null;
 	// RAINMAKER FIX: AbortController for cleanup of event listeners
 	private abortController: AbortController | null = null;
 	// RAINMAKER FIX: Prevent concurrent message loads
@@ -2238,6 +2240,17 @@ class LettaChatView extends ItemView {
 			cls: "letta-vault-status",
 		});
 		this.updateVaultToolsIndicator();
+
+		// Focus mode toggle
+		this.focusToggle = statusLine.createEl("button", {
+			cls: "letta-focus-toggle",
+		});
+		this.focusToggle.addEventListener("click", async () => {
+			this.plugin.settings.focusMode = !this.plugin.settings.focusMode;
+			await this.plugin.saveSettings();
+			this.updateFocusToggle();
+		}, { signal });
+		this.updateFocusToggle();
 
 		// Collapsible tips section
 		const tipsSection = container.createEl("div", { cls: "letta-tips-section" });
@@ -3923,6 +3936,22 @@ class LettaChatView extends ItemView {
 		}
 	}
 
+	updateFocusToggle() {
+		if (!this.focusToggle) return;
+
+		const enabled = this.plugin.settings.focusMode;
+
+		if (enabled) {
+			this.focusToggle.addClass("letta-focus-active");
+			this.focusToggle.textContent = "Focus: On";
+			this.focusToggle.title = "Focus mode ON - Agent sees your current note. Click to disable.";
+		} else {
+			this.focusToggle.removeClass("letta-focus-active");
+			this.focusToggle.textContent = "Focus: Off";
+			this.focusToggle.title = "Focus mode OFF - Click to enable tracking of current note.";
+		}
+	}
+
 	showDisconnectedMessage() {
 		// Only show if chat container exists
 		if (!this.chatContainer) {
@@ -4611,6 +4640,35 @@ class LettaChatView extends ItemView {
 	async sendMessage() {
 		let message = this.messageInput.value.trim();
 		if (!message) return;
+
+		// Handle /vault command - prepend instruction to use vault tools
+		if (message.toLowerCase().startsWith('/vault ')) {
+			const vaultMessage = message.slice(7).trim(); // Remove '/vault '
+			if (!vaultMessage) {
+				await this.addMessage(
+					"assistant",
+					"**Usage:** `/vault <your request>`\n\nExamples:\n- `/vault create a note called ideas.md`\n- `/vault read my daily notes`\n- `/vault search for project updates`",
+					"System",
+				);
+				return;
+			}
+			// Prepend context telling agent to use vault tools
+			message = `[VAULT OPERATION REQUESTED] Please use your Obsidian vault tools to: ${vaultMessage}`;
+		}
+
+		// Handle /focus command - toggle focus mode
+		if (message.toLowerCase() === '/focus') {
+			this.plugin.settings.focusMode = !this.plugin.settings.focusMode;
+			await this.plugin.saveSettings();
+			this.updateFocusToggle();
+			const status = this.plugin.settings.focusMode ? "enabled" : "disabled";
+			await this.addMessage(
+				"assistant",
+				`**Focus mode ${status}.**\n\n${this.plugin.settings.focusMode ? "The agent will now receive context about your currently open note." : "The agent will no longer track your current note."}`,
+				"System",
+			);
+			return;
+		}
 
 		// Extract mentioned files and include their content
 		const mentionedFiles = this.extractMentionedFiles();
