@@ -2167,6 +2167,43 @@ class LettaChatView extends ItemView {
 			this.updateFocusIndicator();
 		}
 
+		// Collapsible tips section
+		const tipsSection = container.createEl("div", { cls: "letta-tips-section" });
+
+		const tipsToggle = tipsSection.createEl("button", {
+			cls: "letta-tips-toggle",
+			text: "💡 Tips for talking to your agent",
+		});
+
+		const tipsContent = tipsSection.createEl("div", {
+			cls: "letta-tips-content letta-tips-collapsed",
+		});
+
+		const tips = [
+			{ title: "Create a note", example: '"Create a note called Meeting Notes with..."' },
+			{ title: "Read a file", example: '"Read the file projects/roadmap.md"' },
+			{ title: "Search vault", example: '"Search my vault for project alpha"' },
+			{ title: "Current note", example: '"What\'s in the note I\'m looking at?"' },
+			{ title: "Modify note", example: '"Add a new section to this note about..."' },
+		];
+
+		tips.forEach(tip => {
+			const tipEl = tipsContent.createEl("div", { cls: "letta-tip-item" });
+			tipEl.createEl("span", { cls: "letta-tip-title", text: tip.title + ": " });
+			tipEl.createEl("span", { cls: "letta-tip-example", text: tip.example });
+		});
+
+		tipsToggle.addEventListener("click", () => {
+			const isCollapsed = tipsContent.classList.contains("letta-tips-collapsed");
+			if (isCollapsed) {
+				tipsContent.removeClass("letta-tips-collapsed");
+				tipsToggle.textContent = "💡 Hide tips";
+			} else {
+				tipsContent.addClass("letta-tips-collapsed");
+				tipsToggle.textContent = "💡 Tips for talking to your agent";
+			}
+		}, { signal });
+
 		// Chat container
 		this.chatContainer = container.createEl("div", {
 			cls: "letta-chat-container",
@@ -2192,9 +2229,9 @@ class LettaChatView extends ItemView {
 		const typingDots = this.typingIndicator.createEl("span", {
 			cls: "letta-typing-dots",
 		});
-		typingDots.createEl("span", { text: "." });
-		typingDots.createEl("span", { text: "." });
-		typingDots.createEl("span", { text: "." });
+		typingDots.createEl("span");
+		typingDots.createEl("span");
+		typingDots.createEl("span");
 
 		// Now that chat container exists, update status to show disconnected message if needed
 		this.updateChatStatus();
@@ -2619,6 +2656,31 @@ class LettaChatView extends ItemView {
 				});
 				// Use robust markdown rendering instead of innerHTML
 				await this.renderMarkdownContent(contentEl, textContent);
+
+				// Add copy button for assistant messages
+				if (type === "assistant") {
+					const copyBtn = bubbleEl.createEl("button", {
+						cls: "letta-copy-btn",
+						attr: { "aria-label": "Copy as markdown" },
+					});
+					copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+
+					copyBtn.addEventListener("click", async (e) => {
+						e.stopPropagation();
+						try {
+							await navigator.clipboard.writeText(textContent);
+							copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+							copyBtn.addClass("letta-copy-success");
+							setTimeout(() => {
+								copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+								copyBtn.removeClass("letta-copy-success");
+							}, 2000);
+						} catch (err) {
+							console.error("Failed to copy:", err);
+							new Notice("Failed to copy to clipboard");
+						}
+					});
+				}
 			}
 		}
 
