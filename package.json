@@ -9,7 +9,8 @@
 	},
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
-		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production && npm run dist",
+		"dist": "node -e \"const fs=require('fs');const dir='dist/rainmaker-obsidian';fs.mkdirSync(dir,{recursive:true});['main.js','manifest.json','styles.css'].forEach(f=>fs.copyFileSync(f,dir+'/'+f));console.log('Copied to '+dir)\"",
 		"version": "node version-bump.mjs && git add manifest.json versions.json"
 	},
 	"keywords": [

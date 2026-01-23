@@ -27,5 +27,8 @@ ai-stuff/
 # npm cache (accidentally created folders)
 %USERPROFILE%/
 
+# Build output folder
+dist/
+
 # Windows null device file
 nul
