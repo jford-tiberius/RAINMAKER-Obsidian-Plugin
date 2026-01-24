@@ -1401,7 +1401,10 @@ export default class LettaPlugin extends Plugin {
 		}
 	}
 
-	async sendMessageToAgent(message: string): Promise<LettaMessage[]> {
+	async sendMessageToAgent(
+		message: string,
+		images?: Array<{ base64: string; mediaType: string }>,
+	): Promise<LettaMessage[]> {
 		if (!this.agent) throw new Error("Agent not connected");
 		if (!this.client) throw new Error("Client not initialized");
 
@@ -1409,13 +1412,35 @@ export default class LettaPlugin extends Plugin {
 			"[Letta NonStream] Sending message to agent:",
 			this.agent.id,
 		);
+
+		// Build content - use array format if images are present
+		let content: any;
+		if (images && images.length > 0) {
+			content = [
+				{ type: "text", text: `[Message from Obsidian chat interface]\n\n${message}` },
+			];
+			for (const img of images) {
+				content.push({
+					type: "image",
+					source: {
+						type: "base64",
+						media_type: img.mediaType,
+						data: img.base64,
+					},
+				});
+			}
+			console.log(`[Letta NonStream] Sending message with ${images.length} image(s)`);
+		} else {
+			content = `[Message from Obsidian chat interface]\n\n${message}`;
+		}
+
 		const response = await this.client.agents.messages.create(
 			this.agent.id,
 			{
 				messages: [
 					{
 						role: "user",
-						content: `[Message from Obsidian chat interface]\n\n${message}`,
+						content,
 					},
 				],
 			},
@@ -1428,6 +1453,7 @@ export default class LettaPlugin extends Plugin {
 
 	async sendMessageToAgentStream(
 		message: string,
+		images: Array<{ base64: string; mediaType: string }> | undefined,
 		onMessage: (message: any) => void,
 		onError: (error: Error) => void,
 		onComplete: () => void,
@@ -1436,6 +1462,27 @@ export default class LettaPlugin extends Plugin {
 		if (!this.client) throw new Error("Client not initialized");
 
 		try {
+			// Build content - use array format if images are present
+			let content: any;
+			if (images && images.length > 0) {
+				content = [
+					{ type: "text", text: `[Message from Obsidian chat interface]\n\n${message}` },
+				];
+				for (const img of images) {
+					content.push({
+						type: "image",
+						source: {
+							type: "base64",
+							media_type: img.mediaType,
+							data: img.base64,
+						},
+					});
+				}
+				console.log(`[Letta Stream] Sending message with ${images.length} image(s)`);
+			} else {
+				content = `[Message from Obsidian chat interface]\n\n${message}`;
+			}
+
 			// Use the SDK's streaming API
 			console.log(
 				"[Letta Stream] Starting stream for agent:",
@@ -1447,7 +1494,7 @@ export default class LettaPlugin extends Plugin {
 					messages: [
 						{
 							role: "user",
-							content: `[Message from Obsidian chat interface]\n\n${message}`,
+							content,
 						},
 					],
 					streamTokens: true,
@@ -2106,6 +2153,14 @@ class LettaChatView extends ItemView {
 	private abortController: AbortController | null = null;
 	// RAINMAKER FIX: Prevent concurrent message loads
 	private isLoadingMessages: boolean = false;
+	// Image paste support
+	private pendingImages: Array<{
+		blob: Blob;
+		base64: string;
+		mediaType: string;
+		previewEl: HTMLElement;
+	}> = [];
+	private imagePreviewContainer: HTMLElement | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: LettaPlugin) {
 		super(leaf);
@@ -2345,6 +2400,11 @@ class LettaChatView extends ItemView {
 		// Now that chat container exists, update status to show disconnected message if needed
 		this.updateChatStatus();
 
+		// Image preview container (for pasted images)
+		this.imagePreviewContainer = container.createEl("div", {
+			cls: "letta-image-preview-container",
+		});
+
 		// Input container
 		this.inputContainer = container.createEl("div", {
 			cls: "letta-input-container",
@@ -2411,6 +2471,23 @@ class LettaChatView extends ItemView {
 			this.handleAutocompleteInput();
 		}, { signal });
 
+		// Handle image paste
+		this.messageInput.addEventListener("paste", async (evt) => {
+			const clipboardData = evt.clipboardData;
+			if (!clipboardData) return;
+
+			const items = clipboardData.items;
+			for (let i = 0; i < items.length; i++) {
+				if (items[i].type.startsWith("image/")) {
+					evt.preventDefault();
+					const blob = items[i].getAsFile();
+					if (blob) {
+						await this.addPastedImage(blob);
+					}
+				}
+			}
+		}, { signal });
+
 		// Start with empty chat
 	}
 
@@ -2426,6 +2503,73 @@ class LettaChatView extends ItemView {
 			clearTimeout(this.heartbeatTimeout);
 			this.heartbeatTimeout = null;
 		}
+
+		// Clean up pending images
+		this.clearPendingImages();
+	}
+
+	/**
+	 * Add a pasted image to the pending images list and show preview
+	 */
+	async addPastedImage(blob: Blob) {
+		const base64 = await this.blobToBase64(blob);
+		const mediaType = blob.type; // e.g., "image/png"
+
+		if (!this.imagePreviewContainer) return;
+
+		// Create preview element
+		const previewEl = this.imagePreviewContainer.createDiv({
+			cls: "letta-image-preview",
+		});
+
+		const img = previewEl.createEl("img", {
+			cls: "letta-preview-image",
+			attr: { src: URL.createObjectURL(blob) },
+		});
+
+		const removeBtn = previewEl.createEl("button", {
+			cls: "letta-image-remove",
+			text: "×",
+		});
+
+		const imageData = { blob, base64, mediaType, previewEl };
+		this.pendingImages.push(imageData);
+
+		removeBtn.addEventListener("click", () => {
+			// Revoke object URL to free memory
+			URL.revokeObjectURL(img.src);
+			this.pendingImages = this.pendingImages.filter(i => i !== imageData);
+			previewEl.remove();
+		});
+	}
+
+	/**
+	 * Convert a Blob to base64 string (without data URL prefix)
+	 */
+	blobToBase64(blob: Blob): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => {
+				const result = reader.result as string;
+				// Remove data URL prefix: "data:image/png;base64,"
+				resolve(result.split(",")[1]);
+			};
+			reader.onerror = reject;
+			reader.readAsDataURL(blob);
+		});
+	}
+
+	/**
+	 * Clear all pending images and their previews
+	 */
+	clearPendingImages() {
+		this.pendingImages.forEach(i => {
+			// Revoke object URLs to free memory
+			const img = i.previewEl.querySelector("img");
+			if (img) URL.revokeObjectURL(img.src);
+			i.previewEl.remove();
+		});
+		this.pendingImages = [];
 	}
 
 	/**
@@ -2459,6 +2603,7 @@ class LettaChatView extends ItemView {
 		content: any,
 		title?: string,
 		reasoningContent?: string,
+		images?: Array<{ base64: string; mediaType: string }>,
 	) {
 		// Adding message to chat interface
 
@@ -2758,6 +2903,19 @@ class LettaChatView extends ItemView {
 						expandBtn.textContent = "See more";
 					}
 				});
+
+				// Display attached images for user messages
+				if (images && images.length > 0) {
+					const imageContainer = contentContainer.createEl("div", {
+						cls: "letta-message-images",
+					});
+					for (const img of images) {
+						imageContainer.createEl("img", {
+							cls: "letta-message-image",
+							attr: { src: `data:${img.mediaType};base64,${img.base64}` },
+						});
+					}
+				}
 			} else {
 				// Regular content for short messages or non-user messages
 				const contentEl = bubbleEl.createEl("div", {
@@ -2765,6 +2923,19 @@ class LettaChatView extends ItemView {
 				});
 				// Use robust markdown rendering instead of innerHTML
 				await this.renderMarkdownContent(contentEl, textContent);
+
+				// Display attached images for user messages
+				if (type === "user" && images && images.length > 0) {
+					const imageContainer = bubbleEl.createEl("div", {
+						cls: "letta-message-images",
+					});
+					for (const img of images) {
+						imageContainer.createEl("img", {
+							cls: "letta-message-image",
+							attr: { src: `data:${img.mediaType};base64,${img.base64}` },
+						});
+					}
+				}
 
 				// Add copy button for assistant messages
 				if (type === "assistant") {
@@ -4790,14 +4961,22 @@ class LettaChatView extends ItemView {
 			return;
 		}
 
+		// Extract pending images before sending
+		const images = this.pendingImages.map(i => ({
+			base64: i.base64,
+			mediaType: i.mediaType,
+		}));
+		// Clear pending images (and their preview elements)
+		this.clearPendingImages();
+
 		// Disable input while processing
 		this.messageInput.disabled = true;
 		this.sendButton.disabled = true;
 		this.sendButton.textContent = "Sending...";
 		this.sendButton.addClass("letta-button-loading");
 
-		// Add user message to chat
-		await this.addMessage("user", message);
+		// Add user message to chat (with images if any)
+		await this.addMessage("user", message, undefined, undefined, images.length > 0 ? images : undefined);
 
 		// Show typing indicator immediately after user message
 		this.showTypingIndicator();
@@ -4837,6 +5016,7 @@ class LettaChatView extends ItemView {
 
 				await this.plugin.sendMessageToAgentStream(
 					message,
+					images.length > 0 ? images : undefined,
 					async (message) => {
 						// Handle each streaming message
 						await this.processStreamingMessage(message);
@@ -4890,7 +5070,7 @@ class LettaChatView extends ItemView {
 			} else {
 				// Use non-streaming API for more stable responses
 				// Sending message via non-streaming API
-				const messages = await this.plugin.sendMessageToAgent(message);
+				const messages = await this.plugin.sendMessageToAgent(message, images.length > 0 ? images : undefined);
 				await this.processNonStreamingMessages(messages);
 			}
 		} catch (error: any) {
@@ -4916,7 +5096,7 @@ class LettaChatView extends ItemView {
 
 				try {
 					const messages =
-						await this.plugin.sendMessageToAgent(message);
+						await this.plugin.sendMessageToAgent(message, images.length > 0 ? images : undefined);
 					await this.processNonStreamingMessages(messages);
 					return; // Success with fallback
 				} catch (fallbackError: any) {
