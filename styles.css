@@ -536,17 +536,28 @@
     position: relative;
 }
 
-/* Copy button for assistant messages */
-.letta-copy-btn {
+/* Message action buttons container (copy, feedback) */
+.letta-message-actions {
     position: absolute;
     top: 8px;
     right: 8px;
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.letta-message-assistant .letta-message-bubble:hover .letta-message-actions {
+    opacity: 1;
+}
+
+/* Individual action button */
+.letta-action-btn {
     background: var(--background-primary);
     border: 1px solid var(--background-modifier-border);
     border-radius: 6px;
     padding: 6px;
     cursor: pointer;
-    opacity: 0;
     transition: all 0.2s ease;
     display: flex;
     align-items: center;
@@ -554,19 +565,36 @@
     color: var(--text-muted);
 }
 
-.letta-message-assistant .letta-message-bubble:hover .letta-copy-btn {
-    opacity: 1;
-}
-
-.letta-copy-btn:hover {
+.letta-action-btn:hover {
     background: var(--background-modifier-hover);
     color: var(--text-normal);
     border-color: var(--background-modifier-border-hover);
 }
 
-.letta-copy-btn.letta-copy-success {
+.letta-action-btn.letta-action-success {
     color: var(--color-green);
     border-color: var(--color-green);
+}
+
+/* Feedback button states */
+.letta-feedback-btn.letta-feedback-selected {
+    opacity: 1;
+}
+
+.letta-feedback-btn.letta-feedback-positive {
+    color: var(--color-green);
+    border-color: var(--color-green);
+    background: rgba(0, 200, 83, 0.1);
+}
+
+.letta-feedback-btn.letta-feedback-negative {
+    color: var(--color-red);
+    border-color: var(--color-red);
+    background: rgba(255, 0, 0, 0.1);
+}
+
+/* Keep feedback buttons visible once selected */
+.letta-message-actions:has(.letta-feedback-selected) {
     opacity: 1;
 }
 

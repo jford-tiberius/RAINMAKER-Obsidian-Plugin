@@ -3152,11 +3152,16 @@ class LettaChatView extends ItemView {
 					}
 				}
 
-				// Add copy button for assistant messages
+				// Add action buttons for assistant messages (copy, feedback)
 				if (type === "assistant") {
-					const copyBtn = bubbleEl.createEl("button", {
-						cls: "letta-copy-btn",
-						attr: { "aria-label": "Copy as markdown" },
+					const actionsEl = bubbleEl.createEl("div", {
+						cls: "letta-message-actions",
+					});
+
+					// Copy button
+					const copyBtn = actionsEl.createEl("button", {
+						cls: "letta-action-btn letta-copy-btn",
+						attr: { "aria-label": "Copy as markdown", "title": "Copy" },
 					});
 					copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
 
@@ -3165,15 +3170,55 @@ class LettaChatView extends ItemView {
 						try {
 							await navigator.clipboard.writeText(textContent);
 							copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
-							copyBtn.addClass("letta-copy-success");
+							copyBtn.addClass("letta-action-success");
 							setTimeout(() => {
 								copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
-								copyBtn.removeClass("letta-copy-success");
+								copyBtn.removeClass("letta-action-success");
 							}, 2000);
 						} catch (err) {
 							console.error("Failed to copy:", err);
 							new Notice("Failed to copy to clipboard");
 						}
+					});
+
+					// Thumbs up button
+					const thumbsUpBtn = actionsEl.createEl("button", {
+						cls: "letta-action-btn letta-feedback-btn",
+						attr: { "aria-label": "Good response", "title": "Good response" },
+					});
+					thumbsUpBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>`;
+
+					thumbsUpBtn.addEventListener("click", async (e) => {
+						e.stopPropagation();
+						if (thumbsUpBtn.classList.contains("letta-feedback-selected")) return;
+
+						// Visual feedback
+						thumbsUpBtn.addClass("letta-feedback-selected", "letta-feedback-positive");
+						thumbsDownBtn.removeClass("letta-feedback-selected", "letta-feedback-negative");
+
+						// Send feedback to agent
+						await this.sendFeedbackToAgent("positive", textContent);
+						new Notice("Thanks for the feedback!");
+					});
+
+					// Thumbs down button
+					const thumbsDownBtn = actionsEl.createEl("button", {
+						cls: "letta-action-btn letta-feedback-btn",
+						attr: { "aria-label": "Poor response", "title": "Poor response" },
+					});
+					thumbsDownBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path></svg>`;
+
+					thumbsDownBtn.addEventListener("click", async (e) => {
+						e.stopPropagation();
+						if (thumbsDownBtn.classList.contains("letta-feedback-selected")) return;
+
+						// Visual feedback
+						thumbsDownBtn.addClass("letta-feedback-selected", "letta-feedback-negative");
+						thumbsUpBtn.removeClass("letta-feedback-selected", "letta-feedback-positive");
+
+						// Send feedback to agent
+						await this.sendFeedbackToAgent("negative", textContent);
+						new Notice("Thanks for the feedback!");
 					});
 				}
 			}
@@ -5047,6 +5092,38 @@ class LettaChatView extends ItemView {
 				this.sizeLimitWarning.style.display = "none";
 			}
 		}, 10000);
+	}
+
+	async sendFeedbackToAgent(feedbackType: "positive" | "negative", responseContent: string) {
+		if (!this.plugin.client || !this.plugin.agent) {
+			console.log("[Letta Plugin] Cannot send feedback: not connected");
+			return;
+		}
+
+		try {
+			// Create a truncated preview of the response for context
+			const preview = responseContent.length > 200
+				? responseContent.substring(0, 200) + "..."
+				: responseContent;
+
+			const feedbackMessage = feedbackType === "positive"
+				? `[USER FEEDBACK: POSITIVE] The user liked your previous response. They gave it a thumbs up. This is helpful feedback for you to know what kind of responses work well. Response preview: "${preview}"`
+				: `[USER FEEDBACK: NEGATIVE] The user did not find your previous response helpful. They gave it a thumbs down. Please consider how you might improve similar responses in the future. Response preview: "${preview}"`;
+
+			// Send feedback as a system-style message (won't show in UI but agent will receive it)
+			console.log(`[Letta Plugin] Sending ${feedbackType} feedback to agent`);
+
+			await this.plugin.client.agents.messages.create(this.plugin.agent.id, {
+				messages: [{
+					role: "user",
+					content: feedbackMessage
+				}]
+			});
+
+			console.log(`[Letta Plugin] Feedback sent successfully`);
+		} catch (error) {
+			console.error("[Letta Plugin] Failed to send feedback:", error);
+		}
 	}
 
 	async sendMessage() {
@@ -9520,16 +9597,42 @@ class LettaChatView extends ItemView {
 			});
 		}
 
-		// Add search input
-		const searchContainer = contentEl.createEl("div", {
+		// Add search and sort controls
+		const controlsContainer = contentEl.createEl("div", {
 			attr: { style: "margin-bottom: 16px;" },
 		});
 
-		const searchInput = searchContainer.createEl("input", {
+		// Search row
+		const searchRow = controlsContainer.createEl("div", {
+			attr: { style: "display: flex; gap: 8px; align-items: center;" },
+		});
+
+		const searchInput = searchRow.createEl("input", {
 			type: "text",
 			placeholder: "Search agents...",
 			attr: {
-				style: "width: 100%; padding: 8px; border: 1px solid var(--background-modifier-border); border-radius: 4px;",
+				style: "flex: 1; padding: 8px; border: 1px solid var(--background-modifier-border); border-radius: 4px;",
+			},
+		});
+
+		// Sort buttons
+		const sortContainer = searchRow.createEl("div", {
+			attr: { style: "display: flex; gap: 4px;" },
+		});
+
+		const sortAscBtn = sortContainer.createEl("button", {
+			text: "A-Z",
+			attr: {
+				title: "Sort A to Z",
+				style: "padding: 6px 10px; border: 1px solid var(--background-modifier-border); border-radius: 4px; cursor: pointer; background: var(--background-primary);",
+			},
+		});
+
+		const sortDescBtn = sortContainer.createEl("button", {
+			text: "Z-A",
+			attr: {
+				title: "Sort Z to A",
+				style: "padding: 6px 10px; border: 1px solid var(--background-modifier-border); border-radius: 4px; cursor: pointer; background: var(--background-primary);",
 			},
 		});
 
@@ -9537,6 +9640,26 @@ class LettaChatView extends ItemView {
 		const agentsContainer = contentEl.createEl("div");
 
 		let currentSearch = "";
+		let sortOrder: "asc" | "desc" | "none" = "none";
+
+		const updateSortButtons = () => {
+			sortAscBtn.style.background = sortOrder === "asc" ? "var(--interactive-accent)" : "var(--background-primary)";
+			sortAscBtn.style.color = sortOrder === "asc" ? "var(--text-on-accent)" : "var(--text-normal)";
+			sortDescBtn.style.background = sortOrder === "desc" ? "var(--interactive-accent)" : "var(--background-primary)";
+			sortDescBtn.style.color = sortOrder === "desc" ? "var(--text-on-accent)" : "var(--text-normal)";
+		};
+
+		sortAscBtn.addEventListener("click", () => {
+			sortOrder = sortOrder === "asc" ? "none" : "asc";
+			updateSortButtons();
+			loadAgents();
+		});
+
+		sortDescBtn.addEventListener("click", () => {
+			sortOrder = sortOrder === "desc" ? "none" : "desc";
+			updateSortButtons();
+			loadAgents();
+		});
 
 		const loadAgents = async () => {
 			agentsContainer.empty();
@@ -9582,6 +9705,13 @@ class LettaChatView extends ItemView {
 						});
 					}
 					return;
+				}
+
+				// Sort agents if a sort order is selected
+				if (sortOrder === "asc") {
+					agents.sort((a: any, b: any) => a.name.localeCompare(b.name));
+				} else if (sortOrder === "desc") {
+					agents.sort((a: any, b: any) => b.name.localeCompare(a.name));
 				}
 
 				for (const agent of agents) {
