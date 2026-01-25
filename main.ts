@@ -2376,6 +2376,11 @@ class LettaChatView extends ItemView {
 		previewEl: HTMLElement;
 	}> = [];
 	private imagePreviewContainer: HTMLElement | null = null;
+	// Agent switching state
+	private isSwitchingAgent: boolean = false;
+	private switchingToAgentName: string | null = null;
+	private switchButton: HTMLElement | null = null;
+	private agentAvatar: HTMLElement | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: LettaPlugin) {
 		super(leaf);
@@ -2406,11 +2411,23 @@ class LettaChatView extends ItemView {
 		// Header with connection status
 		this.header = container.createEl("div", { cls: "letta-chat-header" });
 
+		// Top row: Avatar + Agent info + Menu
 		const titleSection = this.header.createEl("div", {
 			cls: "letta-chat-title-section",
 		});
 
-		this.agentNameElement = titleSection.createEl("h3", {
+		// Agent avatar
+		this.agentAvatar = titleSection.createEl("div", {
+			cls: "letta-agent-avatar",
+		});
+		this.updateAgentAvatar();
+
+		// Agent info container (name + switch button)
+		const agentInfoContainer = titleSection.createEl("div", {
+			cls: "letta-agent-info",
+		});
+
+		this.agentNameElement = agentInfoContainer.createEl("h3", {
 			text: this.plugin.agent
 				? this.plugin.settings.agentName
 				: "No Agent",
@@ -2424,28 +2441,25 @@ class LettaChatView extends ItemView {
 			this.editAgentName(),
 		{ signal });
 
-		const headerButtonContainer = titleSection.createEl("div", {
-			cls: "letta-button-container",
-		});
-
-		// Agent dropdown for quick switching (primary action)
-		const agentDropdown = headerButtonContainer.createEl("div", {
+		// Agent dropdown for quick switching (below agent name)
+		const agentDropdown = agentInfoContainer.createEl("div", {
 			cls: "letta-agent-dropdown",
 		});
 
-		const switchAgentButton = agentDropdown.createEl("span", {
-			text: "Switch ▾",
+		this.switchButton = agentDropdown.createEl("span", {
+			cls: "letta-switch-button",
 		});
-		switchAgentButton.title = "Switch to a different agent";
-		switchAgentButton.addClass("letta-config-button");
+		this.switchButton.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 16V4m0 0L3 8m4-4l4 4m6 4v12m0 0l4-4m-4 4l-4-4"/></svg> Switch`;
+		this.switchButton.title = "Switch to a different agent";
 
 		this.agentDropdownContent = agentDropdown.createEl("div", {
 			cls: "letta-agent-dropdown-content",
 		});
 
 		// Toggle dropdown on click
-		switchAgentButton.addEventListener("click", (e) => {
+		this.switchButton.addEventListener("click", (e) => {
 			e.stopPropagation();
+			if (this.isSwitchingAgent) return; // Prevent switching while already switching
 			if (this.agentDropdownContent) {
 				const isVisible = this.agentDropdownContent.classList.contains("show");
 				if (!isVisible) {
@@ -2461,6 +2475,11 @@ class LettaChatView extends ItemView {
 				this.agentDropdownContent.classList.remove("show");
 			}
 		}, { signal });
+
+		// Header buttons container (right side)
+		const headerButtonContainer = titleSection.createEl("div", {
+			cls: "letta-button-container",
+		});
 
 		// Overflow menu (⋮) for secondary actions
 		const overflowMenu = headerButtonContainer.createEl("div", {
@@ -9337,13 +9356,16 @@ class LettaChatView extends ItemView {
 
 	// Quick switch to a recent agent
 	async quickSwitchToAgent(recent: RecentAgent): Promise<void> {
-		try {
-			new Notice(`Switching to ${recent.name}...`);
+		// Show switching state immediately for visual feedback
+		this.showSwitchingState(recent.name);
 
+		try {
 			// Verify agent still exists
 			const agent = await this.plugin.makeRequest(`/v1/agents/${recent.id}`);
 
 			if (!agent) {
+				// Hide switching state
+				this.hideSwitchingState();
 				// Remove from recent list
 				this.plugin.settings.recentAgents = this.plugin.settings.recentAgents.filter(
 					(a) => a.id !== recent.id
@@ -9356,9 +9378,14 @@ class LettaChatView extends ItemView {
 			// Build project object if we have a slug
 			const project = recent.projectSlug ? { slug: recent.projectSlug } : undefined;
 
-			// Use existing switchToAgent logic
+			// Hide switching state before calling switchToAgent (it will show its own)
+			this.hideSwitchingState();
+
+			// Use existing switchToAgent logic (which has its own switching state)
 			await this.switchToAgent(agent, project);
 		} catch (error) {
+			// Always hide switching state on error
+			this.hideSwitchingState();
 			console.error("[Letta Plugin] Quick switch failed:", error);
 			new Notice(`Failed to switch to ${recent.name}`);
 		}
@@ -9783,14 +9810,157 @@ class LettaChatView extends ItemView {
 		setTimeout(() => searchInput.focus(), 100);
 	}
 
+	// Show switching state with visual feedback
+	showSwitchingState(agentName: string): void {
+		this.isSwitchingAgent = true;
+		this.switchingToAgentName = agentName;
+
+		// Add switching class to header for progress bar animation
+		if (this.header) {
+			this.header.addClass("letta-header-switching");
+		}
+
+		// Update agent name to show switching state
+		if (this.agentNameElement) {
+			this.agentNameElement.textContent = `Switching to ${agentName}...`;
+			this.agentNameElement.className = "letta-chat-title switching";
+		}
+
+		// Update avatar to switching state
+		if (this.agentAvatar) {
+			this.agentAvatar.addClass("switching");
+			this.agentAvatar.textContent = "...";
+		}
+
+		// Update status to switching
+		if (this.statusDot) {
+			this.statusDot.className = "letta-status-dot switching";
+		}
+		if (this.statusText) {
+			this.statusText.textContent = "Switching agents...";
+		}
+
+		// Disable switch button
+		if (this.switchButton) {
+			this.switchButton.addClass("disabled");
+			this.switchButton.setAttribute("aria-disabled", "true");
+		}
+
+		// Show skeleton loader in chat container
+		this.showSkeletonLoader();
+
+		// Close dropdown if open
+		if (this.agentDropdownContent) {
+			this.agentDropdownContent.classList.remove("show");
+		}
+	}
+
+	// Hide switching state and restore normal display
+	hideSwitchingState(): void {
+		this.isSwitchingAgent = false;
+		this.switchingToAgentName = null;
+
+		// Remove switching class from header
+		if (this.header) {
+			this.header.removeClass("letta-header-switching");
+		}
+
+		// Restore agent name display
+		this.updateAgentNameDisplay();
+
+		// Update avatar
+		this.updateAgentAvatar();
+
+		// Re-enable switch button
+		if (this.switchButton) {
+			this.switchButton.removeClass("disabled");
+			this.switchButton.removeAttribute("aria-disabled");
+		}
+
+		// Remove skeleton loader
+		this.removeSkeletonLoader();
+	}
+
+	// Show skeleton loading state in chat container
+	showSkeletonLoader(): void {
+		if (!this.chatContainer) return;
+
+		// Clear existing content
+		this.chatContainer.empty();
+
+		// Create skeleton container
+		const skeleton = this.chatContainer.createEl("div", {
+			cls: "letta-chat-skeleton",
+		});
+
+		// Add 3 skeleton messages
+		for (let i = 0; i < 3; i++) {
+			const message = skeleton.createEl("div", {
+				cls: "letta-skeleton-message",
+			});
+
+			message.createEl("div", { cls: "letta-skeleton-avatar" });
+
+			const content = message.createEl("div", {
+				cls: "letta-skeleton-content",
+			});
+
+			// Varying line widths for natural look
+			const widths = ["85%", "70%", "60%"];
+			content.createEl("div", {
+				cls: "letta-skeleton-line",
+				attr: { style: `width: ${widths[i % 3]}` },
+			});
+			content.createEl("div", {
+				cls: "letta-skeleton-line short",
+				attr: { style: `width: ${i === 0 ? "45%" : "55%"}` },
+			});
+		}
+	}
+
+	// Remove skeleton loader
+	removeSkeletonLoader(): void {
+		if (!this.chatContainer) return;
+
+		const skeleton = this.chatContainer.querySelector(".letta-chat-skeleton");
+		if (skeleton) {
+			skeleton.remove();
+		}
+	}
+
+	// Update agent avatar display
+	updateAgentAvatar(): void {
+		if (!this.agentAvatar) return;
+
+		this.agentAvatar.removeClass("switching");
+
+		if (this.plugin.agent && this.plugin.settings.agentName) {
+			// Get initials from agent name
+			const name = this.plugin.settings.agentName;
+			const initials = name
+				.split(/\s+/)
+				.map((word: string) => word[0])
+				.join("")
+				.toUpperCase()
+				.slice(0, 2);
+			this.agentAvatar.textContent = initials || "?";
+			this.agentAvatar.removeClass("no-agent");
+		} else {
+			this.agentAvatar.textContent = "?";
+			this.agentAvatar.addClass("no-agent");
+		}
+	}
+
 	async switchToAgent(agent: any, project?: any) {
+		// Show switching state immediately for visual feedback
+		this.showSwitchingState(agent.name);
+
 		try {
 			console.log(
 				`[Letta Plugin] Switching to agent: ${agent.name} (ID: ${agent.id})`,
 			);
 
-			// Clear current chat and load more button
-			this.chatContainer.empty();
+			// Note: Don't clear chatContainer here - skeleton loader is already shown
 			this.loadMoreButton = null;
 
 			// CRITICAL: Update both agent name AND agent ID in settings
@@ -9833,6 +10003,9 @@ class LettaChatView extends ItemView {
 			// Ensure Obsidian tools are registered and configured for this agent
 			await this.plugin.registerObsidianTools();
 
+			// Hide switching state before updating UI
+			this.hideSwitchingState();
+
 			// Update UI - agent name
 			this.updateAgentNameDisplay();
 
@@ -9853,6 +10026,8 @@ class LettaChatView extends ItemView {
 
 			new Notice(`Switched to agent: ${agent.name}`);
 		} catch (error) {
+			// Always hide switching state on error
+			this.hideSwitchingState();
 			console.error("Failed to switch agent:", error);
 			new Notice(`Failed to switch agent: ${error.message}`);
 			await this.addMessage(
