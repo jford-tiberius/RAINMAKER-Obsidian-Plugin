@@ -5,7 +5,8 @@
       "Bash(dir /s /a \"%USERPROFILE%\")",
       "Bash(findstr:*)",
       "Bash(gh api:*)",
-      "Bash(git remote set-url:*)"
+      "Bash(git remote set-url:*)",
+      "Bash(git config:*)"
     ]
   }
 }
