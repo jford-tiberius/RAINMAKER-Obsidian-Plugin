@@ -2338,6 +2338,42 @@ const SLASH_COMMANDS: SlashCommand[] = [
 	{ name: "help", description: "Show available commands" },
 ];
 
+// Per-agent conversation state for concurrent multi-agent support
+interface AgentConversationState {
+	agentId: string;
+	agentName: string;
+	projectSlug: string;
+
+	// DOM elements for this agent's chat
+	chatContainer: HTMLElement;
+	typingIndicator: HTMLElement;
+
+	// Streaming state
+	currentReasoningContent: string;
+	assistantReasoningContent: string;
+	currentAssistantContent: string;
+	currentAssistantMessageEl: HTMLElement | null;
+	currentReasoningMessageEl: HTMLElement | null;
+	currentToolMessageEl: HTMLElement | null;
+	currentToolCallId: string | null;
+	currentToolCallArgs: string;
+	currentToolCallName: string;
+	currentToolCallData: any;
+	currentApprovalRequestId: string | null;
+	currentApprovalArgs: string;
+	currentApprovalToolName: string;
+	hasCreatedApprovalUI: boolean;
+
+	// Request state
+	isStreaming: boolean;
+	abortController: AbortController | null;
+
+	// UI state
+	unreadCount: number;
+	lastLoadedCursor: string | null;
+	messageCache: any[];
+}
+
 class LettaChatView extends ItemView {
 	plugin: LettaPlugin;
 	chatContainer: HTMLElement;
@@ -2381,6 +2417,16 @@ class LettaChatView extends ItemView {
 	private switchingToAgentName: string | null = null;
 	private switchButton: HTMLElement | null = null;
 	private agentAvatar: HTMLElement | null = null;
+
+	// Multi-agent concurrent conversation support
+	private agentStates: Map<string, AgentConversationState> = new Map();
+	private activeAgentId: string | null = null;
+
+	// Tab bar UI elements
+	private tabBar: HTMLElement | null = null;
+	private tabContainer: HTMLElement | null = null;
+	private agentTabs: Map<string, HTMLElement> = new Map();
+	private contentArea: HTMLElement | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: LettaPlugin) {
 		super(leaf);
@@ -2602,8 +2648,17 @@ class LettaChatView extends ItemView {
 			}
 		}, { signal });
 
-		// Chat container
-		this.chatContainer = container.createEl("div", {
+		// Tab bar for multi-agent conversations
+		this.createTabBar(container as HTMLElement);
+
+		// Content area that holds all agent chat containers
+		this.contentArea = container.createEl("div", {
+			cls: "letta-content-area",
+		});
+
+		// Create initial chat container for current agent (or placeholder)
+		// This will be properly initialized when we have an agent
+		this.chatContainer = this.contentArea.createEl("div", {
 			cls: "letta-chat-container",
 		});
 
@@ -2667,6 +2722,9 @@ class LettaChatView extends ItemView {
 
 		// Update status now that all UI elements are created
 		this.updateChatStatus();
+
+		// Initialize the first agent tab if we have an agent
+		this.initializeCurrentAgentTab();
 
 		this.messageInput.addEventListener("keydown", (evt) => {
 			// Handle autocomplete navigation
@@ -4172,6 +4230,8 @@ class LettaChatView extends ItemView {
 
 	showTypingIndicator() {
 		if (this.typingIndicator && this.chatContainer) {
+			// Update text to reflect current agent name
+			this.updateTypingIndicatorText();
 			// Move typing indicator to end of chat container so it appears after messages
 			this.chatContainer.appendChild(this.typingIndicator);
 			this.typingIndicator.removeClass("letta-typing-hidden");
@@ -4186,6 +4246,333 @@ class LettaChatView extends ItemView {
 			this.typingIndicator.removeClass("letta-typing-visible");
 			this.typingIndicator.addClass("letta-typing-hidden");
 		}
+	}
+
+	updateTypingIndicatorText() {
+		if (this.typingIndicator) {
+			const typingTextEl = this.typingIndicator.querySelector('.letta-typing-text');
+			if (typingTextEl) {
+				typingTextEl.textContent = `${this.plugin.settings.agentName} is thinking`;
+			}
+		}
+	}
+
+	// ========================================
+	// Multi-Agent State Management
+	// ========================================
+
+	/**
+	 * Get the current active agent's conversation state
+	 */
+	getCurrentAgentState(): AgentConversationState | null {
+		if (!this.activeAgentId) return null;
+		return this.agentStates.get(this.activeAgentId) || null;
+	}
+
+	/**
+	 * Get or create conversation state for a specific agent
+	 */
+	getOrCreateAgentState(agentId: string, agentName: string, projectSlug: string): AgentConversationState {
+		let state = this.agentStates.get(agentId);
+		if (!state) {
+			state = this.createAgentState(agentId, agentName, projectSlug);
+			this.agentStates.set(agentId, state);
+		}
+		return state;
+	}
+
+	/**
+	 * Create a new agent conversation state with its own chat container
+	 */
+	createAgentState(agentId: string, agentName: string, projectSlug: string): AgentConversationState {
+		// Create a new chat container for this agent
+		const chatContainer = this.contentArea?.createEl('div', {
+			cls: 'letta-chat-container',
+			attr: { 'data-agent-id': agentId }
+		}) || document.createElement('div');
+		chatContainer.style.display = 'none'; // Hidden by default until activated
+
+		// Create typing indicator for this agent
+		const typingIndicator = chatContainer.createEl('div', {
+			cls: 'letta-typing-indicator letta-typing-hidden'
+		});
+		const typingText = typingIndicator.createEl('span', {
+			cls: 'letta-typing-text',
+			text: `${agentName} is thinking`
+		});
+		const typingDots = typingIndicator.createEl('span', {
+			cls: 'letta-typing-dots'
+		});
+		typingDots.createEl('span');
+		typingDots.createEl('span');
+		typingDots.createEl('span');
+
+		return {
+			agentId,
+			agentName,
+			projectSlug,
+			chatContainer,
+			typingIndicator,
+
+			// Streaming state - all initialized to defaults
+			currentReasoningContent: '',
+			assistantReasoningContent: '',
+			currentAssistantContent: '',
+			currentAssistantMessageEl: null,
+			currentReasoningMessageEl: null,
+			currentToolMessageEl: null,
+			currentToolCallId: null,
+			currentToolCallArgs: '',
+			currentToolCallName: '',
+			currentToolCallData: null,
+			currentApprovalRequestId: null,
+			currentApprovalArgs: '',
+			currentApprovalToolName: '',
+			hasCreatedApprovalUI: false,
+
+			// Request state
+			isStreaming: false,
+			abortController: null,
+
+			// UI state
+			unreadCount: 0,
+			lastLoadedCursor: null,
+			messageCache: []
+		};
+	}
+
+	/**
+	 * Switch the active agent view (show its chat container, hide others)
+	 */
+	activateAgentState(agentId: string): void {
+		const previousState = this.getCurrentAgentState();
+		const newState = this.agentStates.get(agentId);
+
+		if (!newState) {
+			console.error('[Letta Plugin] Cannot activate non-existent agent state:', agentId);
+			return;
+		}
+
+		// Hide previous agent's container
+		if (previousState && previousState.agentId !== agentId) {
+			previousState.chatContainer.style.display = 'none';
+		}
+
+		// Show new agent's container
+		newState.chatContainer.style.display = 'flex';
+		this.activeAgentId = agentId;
+
+		// Clear unread count when activating
+		newState.unreadCount = 0;
+		this.updateTabIndicator(agentId);
+
+		// Update the shared typing indicator reference for compatibility
+		this.typingIndicator = newState.typingIndicator;
+		this.chatContainer = newState.chatContainer;
+	}
+
+	/**
+	 * Remove an agent's conversation state and clean up
+	 */
+	removeAgentState(agentId: string): void {
+		const state = this.agentStates.get(agentId);
+		if (!state) return;
+
+		// Abort any pending requests
+		if (state.abortController) {
+			state.abortController.abort();
+		}
+
+		// Remove DOM elements
+		state.chatContainer.remove();
+
+		// Remove tab
+		const tab = this.agentTabs.get(agentId);
+		if (tab) {
+			tab.remove();
+			this.agentTabs.delete(agentId);
+		}
+
+		// Remove state
+		this.agentStates.delete(agentId);
+
+		// If this was the active agent, switch to another
+		if (this.activeAgentId === agentId) {
+			const remainingAgents = Array.from(this.agentStates.keys());
+			if (remainingAgents.length > 0) {
+				this.activateAgentState(remainingAgents[0]);
+			} else {
+				this.activeAgentId = null;
+			}
+		}
+	}
+
+	/**
+	 * Update tab indicator for an agent (streaming, unread count, etc.)
+	 */
+	updateTabIndicator(agentId: string, status?: 'streaming' | 'unread' | null): void {
+		const tab = this.agentTabs.get(agentId);
+		const state = this.agentStates.get(agentId);
+		if (!tab || !state) return;
+
+		const indicator = tab.querySelector('.letta-tab-indicator');
+		if (!indicator) return;
+
+		// Remove existing indicator classes
+		indicator.removeClass('streaming', 'unread');
+		indicator.textContent = '';
+
+		if (status === 'streaming' || state.isStreaming) {
+			indicator.addClass('streaming');
+		} else if (state.unreadCount > 0) {
+			indicator.addClass('unread');
+			indicator.textContent = state.unreadCount.toString();
+		}
+	}
+
+	/**
+	 * Increment unread count for an agent (called when receiving messages for non-active agent)
+	 */
+	incrementUnreadCount(agentId: string): void {
+		const state = this.agentStates.get(agentId);
+		if (state && agentId !== this.activeAgentId) {
+			state.unreadCount++;
+			this.updateTabIndicator(agentId);
+		}
+	}
+
+	// ========================================
+	// Tab Bar UI Management
+	// ========================================
+
+	/**
+	 * Create the tab bar UI structure
+	 */
+	createTabBar(container: HTMLElement): void {
+		this.tabBar = container.createEl('div', { cls: 'letta-tab-bar' });
+
+		// Container for agent tabs
+		this.tabContainer = this.tabBar.createEl('div', { cls: 'letta-tab-container' });
+
+		// Add button for new agent conversation
+		const addButton = this.tabBar.createEl('button', {
+			cls: 'letta-tab-add',
+			text: '+'
+		});
+		addButton.title = 'Start new agent conversation';
+		addButton.addEventListener('click', () => {
+			this.openAgentConfig();
+		});
+	}
+
+	/**
+	 * Create a tab for an agent
+	 */
+	createAgentTab(agentId: string, agentName: string): HTMLElement {
+		if (!this.tabContainer) return document.createElement('div');
+
+		const tab = this.tabContainer.createEl('div', {
+			cls: 'letta-tab',
+			attr: { 'data-agent-id': agentId }
+		});
+
+		// Avatar with initials
+		const initials = this.getAgentInitials(agentName);
+		const avatar = tab.createEl('span', {
+			cls: 'letta-tab-avatar',
+			text: initials
+		});
+
+		// Agent name
+		const name = tab.createEl('span', {
+			cls: 'letta-tab-name',
+			text: agentName
+		});
+
+		// Status indicator (for streaming/unread)
+		const indicator = tab.createEl('span', {
+			cls: 'letta-tab-indicator'
+		});
+
+		// Close button
+		const closeBtn = tab.createEl('button', {
+			cls: 'letta-tab-close',
+			text: '×'
+		});
+		closeBtn.title = 'Close conversation';
+		closeBtn.addEventListener('click', (e) => {
+			e.stopPropagation();
+			this.closeAgentTab(agentId);
+		});
+
+		// Click to switch to this agent
+		tab.addEventListener('click', () => {
+			this.switchToAgentTab(agentId);
+		});
+
+		this.agentTabs.set(agentId, tab);
+		return tab;
+	}
+
+	/**
+	 * Switch to an agent's tab (activates its conversation)
+	 */
+	switchToAgentTab(agentId: string): void {
+		// Update tab active states
+		this.agentTabs.forEach((tab, id) => {
+			if (id === agentId) {
+				tab.addClass('active');
+			} else {
+				tab.removeClass('active');
+			}
+		});
+
+		// Activate the agent's state
+		this.activateAgentState(agentId);
+
+		// Update header UI to reflect current agent
+		const state = this.agentStates.get(agentId);
+		if (state) {
+			this.plugin.settings.agentName = state.agentName;
+			this.updateAgentDisplay(state.agentName);
+		}
+	}
+
+	/**
+	 * Close an agent's tab and clean up
+	 */
+	closeAgentTab(agentId: string): void {
+		// Don't allow closing if it's the only tab
+		if (this.agentStates.size <= 1) {
+			new Notice('Cannot close the last conversation tab');
+			return;
+		}
+
+		this.removeAgentState(agentId);
+	}
+
+	/**
+	 * Update the display of the active agent in the header
+	 */
+	updateAgentDisplay(agentName: string): void {
+		if (this.agentNameElement) {
+			this.agentNameElement.textContent = agentName;
+			this.agentNameElement.removeClass('no-agent');
+		}
+		this.updateAgentAvatar();
+		this.updateTypingIndicatorText();
+	}
+
+	/**
+	 * Get initials from agent name (e.g., "Executive Assistant" -> "EA")
+	 */
+	getAgentInitials(name: string): string {
+		if (!name) return '?';
+		const words = name.trim().split(/\s+/);
+		if (words.length === 1) {
+			return words[0].substring(0, 2).toUpperCase();
+		}
+		return (words[0][0] + words[words.length - 1][0]).toUpperCase();
 	}
 
 	handleHeartbeat() {
@@ -5325,12 +5712,29 @@ class LettaChatView extends ItemView {
 				// Reset streaming state (now safe since we completed above)
 				this.resetStreamingState();
 
+				// Track which agent this streaming session belongs to
+				this.currentStreamingAgentId = this.plugin.agent?.id || null;
+
+				// Update tab indicator to show streaming state
+				if (this.currentStreamingAgentId) {
+					const state = this.agentStates.get(this.currentStreamingAgentId);
+					if (state) {
+						state.isStreaming = true;
+						this.updateTabIndicator(this.currentStreamingAgentId, 'streaming');
+					}
+				}
+
 				await this.plugin.sendMessageToAgentStream(
 					message,
 					images.length > 0 ? images : undefined,
 					async (message) => {
 						// Handle each streaming message
 						await this.processStreamingMessage(message);
+
+						// If user switched agents during streaming, update unread count for this agent
+						if (this.currentStreamingAgentId && this.currentStreamingAgentId !== this.activeAgentId) {
+							this.incrementUnreadCount(this.currentStreamingAgentId);
+						}
 					},
 					async (error) => {
 						// Handle streaming error
@@ -5376,6 +5780,19 @@ class LettaChatView extends ItemView {
 						// Handle streaming completion
 						// Streaming completed
 						this.markStreamingComplete();
+
+						// Clear streaming state for the agent
+						if (this.currentStreamingAgentId) {
+							const state = this.agentStates.get(this.currentStreamingAgentId);
+							if (state) {
+								state.isStreaming = false;
+							}
+							// Update tab indicator to remove streaming state
+							this.updateTabIndicator(this.currentStreamingAgentId);
+						}
+
+						// Clear streaming agent tracking
+						this.currentStreamingAgentId = null;
 					},
 				);
 			} else {
@@ -8469,6 +8886,7 @@ class LettaChatView extends ItemView {
 	}
 
 	// State for streaming messages
+	private currentStreamingAgentId: string | null = null; // Track which agent initiated streaming
 	private currentReasoningContent: string = "";
 	private assistantReasoningContent: string = ""; // Separate reasoning storage for assistant messages
 	private currentAssistantContent: string = "";
@@ -9952,65 +10370,72 @@ class LettaChatView extends ItemView {
 	}
 
 	async switchToAgent(agent: any, project?: any) {
-		// Show switching state immediately for visual feedback
-		this.showSwitchingState(agent.name);
+		const agentId = agent.id;
+		const agentName = agent.name;
+		const projectSlug = project?.slug || this.plugin.settings.lettaProjectSlug;
+
+		console.log(`[Letta Plugin] Switching to agent: ${agentName} (ID: ${agentId})`);
+
+		// Check if we already have a tab/state for this agent
+		const existingState = this.agentStates.get(agentId);
+		if (existingState) {
+			// Just switch to the existing tab - no need to reload
+			console.log(`[Letta Plugin] Switching to existing tab for agent: ${agentName}`);
+			this.switchToAgentTab(agentId);
+
+			// Update plugin settings
+			this.plugin.settings.agentName = agentName;
+			this.plugin.settings.agentId = agentId;
+			this.plugin.agent = { id: agentId, name: agentName, ...agent };
+			await this.plugin.saveSettings();
+
+			// Track in recent agents
+			await this.plugin.trackRecentAgent({ id: agentId, name: agentName }, projectSlug);
+
+			new Notice(`Switched to ${agentName}`);
+			return;
+		}
+
+		// New agent - show switching state
+		this.showSwitchingState(agentName);
 
 		try {
-			console.log(
-				`[Letta Plugin] Switching to agent: ${agent.name} (ID: ${agent.id})`,
-			);
-
-			// Note: Don't clear chatContainer here - skeleton loader is already shown
-			this.loadMoreButton = null;
-
-			// CRITICAL: Update both agent name AND agent ID in settings
-			this.plugin.settings.agentName = agent.name;
-			this.plugin.settings.agentId = agent.id; // This was missing!
-
+			// Update settings
+			this.plugin.settings.agentName = agentName;
+			this.plugin.settings.agentId = agentId;
 			if (project) {
-				this.plugin.settings.lettaProjectSlug = project.slug;
+				this.plugin.settings.lettaProjectSlug = projectSlug;
 			}
 			await this.plugin.saveSettings();
 
 			// Track in recent agents for quick switching
-			await this.plugin.trackRecentAgent(
-				{ id: agent.id, name: agent.name },
-				project?.slug
-			);
+			await this.plugin.trackRecentAgent({ id: agentId, name: agentName }, projectSlug);
 
-			// Update plugin agent reference with consistent format (like setupAgent does)
-			this.plugin.agent = {
-				id: agent.id,
-				name: agent.name,
-				// Preserve other properties if they exist
-				...agent,
-			};
+			// Update plugin agent reference
+			this.plugin.agent = { id: agentId, name: agentName, ...agent };
 
 			// Verify the agent switch by checking if we can access it
-			const verifyAgent = await this.plugin.makeRequest(
-				`/v1/agents/${agent.id}`,
-			);
+			const verifyAgent = await this.plugin.makeRequest(`/v1/agents/${agentId}`);
 			if (!verifyAgent) {
-				throw new Error(
-					`Cannot access agent ${agent.id} - may not exist or lack permissions`,
-				);
+				throw new Error(`Cannot access agent ${agentId} - may not exist or lack permissions`);
 			}
 
-			console.log(
-				`[Letta Plugin] Successfully verified agent access: ${verifyAgent.name}`,
-			);
+			console.log(`[Letta Plugin] Successfully verified agent access: ${verifyAgent.name}`);
 
 			// Ensure Obsidian tools are registered and configured for this agent
 			await this.plugin.registerObsidianTools();
 
-			// Hide switching state before updating UI
+			// Create new agent state and tab
+			const newState = this.getOrCreateAgentState(agentId, agentName, projectSlug);
+
+			// Create tab for this agent
+			this.createAgentTab(agentId, agentName);
+
+			// Hide switching state before activating
 			this.hideSwitchingState();
 
-			// Update UI - agent name
-			this.updateAgentNameDisplay();
-
-			// Update chat status without loading historical messages initially
-			await this.updateChatStatus(false);
+			// Activate this agent's tab and chat container
+			this.switchToAgentTab(agentId);
 
 			// Load conversation history if enabled
 			if (this.plugin.settings.loadHistoryOnSwitch) {
@@ -10019,22 +10444,79 @@ class LettaChatView extends ItemView {
 				// Show welcome message for fresh conversation
 				await this.addMessage(
 					"assistant",
-					`Switched to **${agent.name}**${project ? ` (Project: ${project.name})` : ""}. Conversation history available.`,
+					`Connected to **${agentName}**${project ? ` (Project: ${project.name})` : ""}. Conversation history available.`,
 					"System",
 				);
 			}
 
-			new Notice(`Switched to agent: ${agent.name}`);
+			new Notice(`Switched to agent: ${agentName}`);
 		} catch (error) {
 			// Always hide switching state on error
 			this.hideSwitchingState();
 			console.error("Failed to switch agent:", error);
-			new Notice(`Failed to switch agent: ${error.message}`);
+			new Notice(`Failed to switch agent: ${(error as Error).message}`);
+
+			// Add error to current chat container (not the failed agent's)
 			await this.addMessage(
 				"assistant",
-				`**Error**: Failed to switch agent: ${error.message}`,
+				`**Error**: Failed to switch agent: ${(error as Error).message}`,
 				"Error",
 			);
+		}
+	}
+
+	/**
+	 * Initialize the first agent tab when the view opens with an existing agent
+	 */
+	initializeCurrentAgentTab(): void {
+		if (!this.plugin.agent) return;
+
+		const agentId = this.plugin.agent.id;
+		const agentName = this.plugin.settings.agentName;
+		const projectSlug = this.plugin.settings.lettaProjectSlug;
+
+		// Check if we already have state for this agent
+		if (!this.agentStates.has(agentId)) {
+			// Create state - but reuse the existing chat container created in onOpen
+			const state: AgentConversationState = {
+				agentId,
+				agentName,
+				projectSlug,
+				chatContainer: this.chatContainer,
+				typingIndicator: this.typingIndicator,
+
+				// Streaming state - all initialized to defaults
+				currentReasoningContent: '',
+				assistantReasoningContent: '',
+				currentAssistantContent: '',
+				currentAssistantMessageEl: null,
+				currentReasoningMessageEl: null,
+				currentToolMessageEl: null,
+				currentToolCallId: null,
+				currentToolCallArgs: '',
+				currentToolCallName: '',
+				currentToolCallData: null,
+				currentApprovalRequestId: null,
+				currentApprovalArgs: '',
+				currentApprovalToolName: '',
+				hasCreatedApprovalUI: false,
+
+				// Request state
+				isStreaming: false,
+				abortController: null,
+
+				// UI state
+				unreadCount: 0,
+				lastLoadedCursor: null,
+				messageCache: []
+			};
+
+			this.agentStates.set(agentId, state);
+			this.activeAgentId = agentId;
+
+			// Create tab for this agent and mark it active
+			const tab = this.createAgentTab(agentId, agentName);
+			tab.addClass('active');
 		}
 	}
 }

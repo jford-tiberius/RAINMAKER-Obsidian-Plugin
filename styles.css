@@ -410,6 +410,193 @@
     background: var(--background-modifier-hover);
 }
 
+/* ========================================
+   Tab Bar for Multi-Agent Conversations
+   ======================================== */
+
+.letta-tab-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    background: var(--background-secondary);
+    border-bottom: 1px solid var(--background-modifier-border);
+    overflow-x: auto;
+    scrollbar-width: thin;
+    flex-shrink: 0;
+}
+
+.letta-tab-bar::-webkit-scrollbar {
+    height: 4px;
+}
+
+.letta-tab-bar::-webkit-scrollbar-thumb {
+    background: var(--background-modifier-border);
+    border-radius: 2px;
+}
+
+.letta-tab-container {
+    display: flex;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+}
+
+.letta-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    cursor: pointer;
+    min-width: 0;
+    flex-shrink: 0;
+    max-width: 180px;
+    transition: all 0.15s ease;
+}
+
+.letta-tab:hover {
+    background: var(--background-modifier-hover);
+}
+
+.letta-tab.active {
+    background: var(--interactive-accent);
+    border-color: var(--interactive-accent);
+    color: white;
+}
+
+.letta-tab.active .letta-tab-avatar {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.letta-tab.active .letta-tab-name {
+    color: white;
+}
+
+.letta-tab.active .letta-tab-close {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.letta-tab.active .letta-tab-close:hover {
+    color: white;
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.letta-tab-avatar {
+    width: 24px;
+    height: 24px;
+    min-width: 24px;
+    border-radius: 6px;
+    background: var(--interactive-accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    color: white;
+    font-size: 10px;
+}
+
+.letta-tab-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-normal);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.letta-tab-indicator {
+    width: 8px;
+    height: 8px;
+    min-width: 8px;
+    border-radius: 50%;
+    display: none;
+}
+
+.letta-tab-indicator.streaming {
+    display: block;
+    background: var(--color-green);
+    animation: letta-tab-pulse 1s ease-in-out infinite;
+}
+
+.letta-tab-indicator.unread {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--color-red);
+    color: white;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+@keyframes letta-tab-pulse {
+    0%, 100% { opacity: 0.5; transform: scale(0.9); }
+    50% { opacity: 1; transform: scale(1); }
+}
+
+.letta-tab-close {
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+    transition: all 0.15s ease;
+}
+
+.letta-tab-close:hover {
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
+}
+
+.letta-tab-add {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px dashed var(--background-modifier-border);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 6px;
+    font-size: 16px;
+    transition: all 0.15s ease;
+}
+
+.letta-tab-add:hover {
+    border-color: var(--interactive-accent);
+    color: var(--interactive-accent);
+    background: var(--background-modifier-hover);
+}
+
+/* Content area for chat containers */
+.letta-content-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
 .letta-chat-subtitle {
     margin: 0;
     color: var(--text-muted);
