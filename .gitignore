@@ -32,3 +32,6 @@ dist/
 
 # Windows null device file
 nul
+
+# Claude Code local settings
+.claude/settings.local.json
