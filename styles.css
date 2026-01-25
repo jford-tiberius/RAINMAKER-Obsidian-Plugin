@@ -140,55 +140,6 @@
     }
 }
 
-/* Tips Section */
-.letta-tips-section {
-    border-bottom: 1px solid var(--background-modifier-border);
-    background: var(--background-primary-alt);
-}
-
-.letta-tips-toggle {
-    width: 100%;
-    padding: 10px 16px;
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    font-size: 0.85em;
-    cursor: pointer;
-    text-align: left;
-    transition: all 0.15s ease;
-}
-
-.letta-tips-toggle:hover {
-    background: var(--background-modifier-hover);
-    color: var(--text-normal);
-}
-
-.letta-tips-content {
-    padding: 0 16px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.letta-tips-content.letta-tips-collapsed {
-    display: none;
-}
-
-.letta-tip-item {
-    font-size: 0.85em;
-    line-height: 1.4;
-}
-
-.letta-tip-title {
-    font-weight: 600;
-    color: var(--text-normal);
-}
-
-.letta-tip-example {
-    color: var(--text-muted);
-    font-style: italic;
-}
-
 .letta-chat-title-section {
     display: flex;
     flex-direction: row;
