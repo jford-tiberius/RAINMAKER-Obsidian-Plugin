@@ -358,6 +358,27 @@ export default class LettaPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "letta-list-agent-tools",
+			name: "List Agent Tools",
+			callback: async () => {
+				if (!this.client || !this.agent) {
+					new Notice("No agent connected");
+					return;
+				}
+				try {
+					const agentDetails = await this.client.agents.retrieve(this.agent.id);
+					const tools = agentDetails.tools || [];
+					console.log("[Letta Plugin] Agent tools:", tools);
+					const toolNames = tools.map((t: any) => typeof t === 'string' ? t : t.name).join(', ');
+					new Notice(`Agent has ${tools.length} tools: ${toolNames}`);
+				} catch (e) {
+					console.error("[Letta Plugin] Failed to list tools:", e);
+					new Notice("Failed to list tools - check console");
+				}
+			},
+		});
+
 		// Add settings tab
 		this.addSettingTab(new LettaSettingTab(this.app, this));
 
@@ -1753,6 +1774,137 @@ def obsidian_delete_file(
         "requires_approval": True
     })
 `
+			},
+			{
+				name: "obsidian_create_folder",
+				description: "Create a new folder in the Obsidian vault",
+				tags: ["obsidian", "vault-write"],
+				code: `
+def obsidian_create_folder(
+    folder_path: str
+) -> str:
+    """
+    Create a new folder in the vault.
+
+    Args:
+        folder_path: Path for the new folder (e.g., 'projects/myproject')
+
+    Returns:
+        str: JSON with action details for the Obsidian plugin to execute
+    """
+    import json
+    return json.dumps({
+        "action": "create_folder",
+        "folder_path": folder_path
+    })
+`
+			},
+			{
+				name: "obsidian_rename",
+				description: "Rename a file or folder in the Obsidian vault (requires user approval)",
+				tags: ["obsidian", "vault-write"],
+				code: `
+def obsidian_rename(
+    old_path: str,
+    new_name: str
+) -> str:
+    """
+    Rename a file or folder. Requires user approval.
+
+    Args:
+        old_path: Current path of the file/folder
+        new_name: New name (just the name, not full path)
+
+    Returns:
+        str: JSON with action details for the Obsidian plugin to execute
+    """
+    import json
+    return json.dumps({
+        "action": "rename",
+        "old_path": old_path,
+        "new_name": new_name,
+        "requires_approval": True
+    })
+`
+			},
+			{
+				name: "obsidian_move",
+				description: "Move a file or folder to a different location (requires user approval)",
+				tags: ["obsidian", "vault-write"],
+				code: `
+def obsidian_move(
+    source_path: str,
+    destination_folder: str
+) -> str:
+    """
+    Move a file or folder to a new location. Requires user approval.
+
+    Args:
+        source_path: Current path of the file/folder
+        destination_folder: Target folder path
+
+    Returns:
+        str: JSON with action details for the Obsidian plugin to execute
+    """
+    import json
+    return json.dumps({
+        "action": "move",
+        "source_path": source_path,
+        "destination_folder": destination_folder,
+        "requires_approval": True
+    })
+`
+			},
+			{
+				name: "obsidian_copy_file",
+				description: "Copy a file to a new location in the vault",
+				tags: ["obsidian", "vault-write"],
+				code: `
+def obsidian_copy_file(
+    source_path: str,
+    destination_path: str
+) -> str:
+    """
+    Copy a file to a new location.
+
+    Args:
+        source_path: Path of the file to copy
+        destination_path: Full path for the copy (including filename)
+
+    Returns:
+        str: JSON with action details for the Obsidian plugin to execute
+    """
+    import json
+    return json.dumps({
+        "action": "copy_file",
+        "source_path": source_path,
+        "destination_path": destination_path
+    })
+`
+			},
+			{
+				name: "obsidian_get_metadata",
+				description: "Get metadata for a file without reading full content",
+				tags: ["obsidian", "vault-read"],
+				code: `
+def obsidian_get_metadata(
+    file_path: str
+) -> str:
+    """
+    Get file metadata (size, dates, tags, links) without reading full content.
+
+    Args:
+        file_path: Path to the file
+
+    Returns:
+        str: JSON with action details for the Obsidian plugin to execute
+    """
+    import json
+    return json.dumps({
+        "action": "get_metadata",
+        "file_path": file_path
+    })
+`
 			}
 		];
 	}
@@ -1813,7 +1965,14 @@ def obsidian_delete_file(
 							(typeof t === 'object' && t.id === existingTool.id)
 						);
 
-						if (isToolAttached) {
+						console.log(`[Letta Plugin] Tool '${toolDef.name}' status:`, {
+						exists: !!existingTool,
+						existingId: existingTool?.id,
+						attached: isToolAttached,
+						agentToolCount: currentTools.length
+					});
+
+					if (isToolAttached) {
 							console.log(`[Letta Plugin] Tool '${toolDef.name}' already attached to agent`);
 							registeredCount++;
 							continue;
@@ -1851,16 +2010,72 @@ def obsidian_delete_file(
 		// Report results
 		if (registeredCount === toolDefinitions.length) {
 			console.log(`[Letta Plugin] Successfully registered all ${registeredCount} vault tools`);
+			// Update agent's persona with tool instructions
+			await this.updateAgentSystemWithToolInstructions();
 			new Notice(`Vault tools ready (${registeredCount} tools)`);
 			return true;
 		} else if (registeredCount > 0) {
 			console.warn(`[Letta Plugin] Partially registered vault tools: ${registeredCount}/${toolDefinitions.length}`);
+			// Still update persona with available tools
+			await this.updateAgentSystemWithToolInstructions();
 			new Notice(`Vault tools partially ready (${registeredCount}/${toolDefinitions.length} tools)`);
 			return true; // Partial success is still usable
 		} else {
 			console.error("[Letta Plugin] Failed to register any vault tools");
 			new Notice("Failed to register vault tools - check console for details");
 			return false;
+		}
+	}
+
+	async updateAgentSystemWithToolInstructions(): Promise<void> {
+		if (!this.client || !this.agent) return;
+
+		const toolInstructions = `
+
+## Available Vault Tools
+
+You have the following tools to interact with the user's Obsidian vault. ALWAYS use these tools for vault operations - do NOT use external APIs or MCP servers.
+
+### File Operations:
+1. **write_obsidian_note(title, content, folder)** - Create or overwrite a note
+2. **obsidian_read_file(file_path, include_metadata)** - Read a file's contents and metadata
+3. **obsidian_modify_file(file_path, operation, content, section_heading)** - Modify existing file (append/prepend/replace_section)
+4. **obsidian_delete_file(file_path, move_to_trash)** - Delete a file
+
+### Search & Discovery:
+5. **obsidian_search_vault(query, search_type, folder, limit)** - Search for files by name/content/tags/path
+6. **obsidian_list_files(folder, recursive, limit)** - List files in a folder
+7. **obsidian_get_metadata(file_path)** - Get file metadata without reading full content
+
+### Organization:
+8. **obsidian_create_folder(folder_path)** - Create a new folder
+9. **obsidian_rename(old_path, new_name)** - Rename a file or folder
+10. **obsidian_move(source_path, destination_folder)** - Move file/folder to new location
+11. **obsidian_copy_file(source_path, destination_path)** - Copy a file
+
+When the user asks to create, read, edit, search, or organize files in their vault, use these tools.
+`;
+
+		try {
+			// Get current memory blocks
+			const blocks = await this.client.agents.blocks.list(this.agent.id);
+			const personaBlock = blocks.find((b: any) => b.label === 'persona');
+
+			if (personaBlock && personaBlock.label && !personaBlock.value.includes('Available Vault Tools')) {
+				console.log("[Letta Plugin] Updating agent persona with tool instructions...");
+				await this.client.agents.blocks.modify(
+					this.agent.id,
+					personaBlock.label,
+					{ value: personaBlock.value + toolInstructions }
+				);
+				console.log("[Letta Plugin] Successfully updated agent persona with tool instructions");
+			} else if (!personaBlock) {
+				console.log("[Letta Plugin] No persona block found - skipping tool instruction update");
+			} else {
+				console.log("[Letta Plugin] Tool instructions already present in persona block");
+			}
+		} catch (e) {
+			console.error("[Letta Plugin] Failed to update agent persona with tool instructions:", e);
 		}
 	}
 
@@ -5691,7 +5906,12 @@ class LettaChatView extends ItemView {
 			"obsidian_search_vault",
 			"obsidian_list_files",
 			"obsidian_modify_file",
-			"obsidian_delete_file"
+			"obsidian_delete_file",
+			"obsidian_create_folder",
+			"obsidian_rename",
+			"obsidian_move",
+			"obsidian_copy_file",
+			"obsidian_get_metadata"
 		];
 
 		if (toolName) {
@@ -6221,6 +6441,31 @@ class LettaChatView extends ItemView {
 					this.displayDeleteResult(container, result);
 					break;
 
+				case "create_folder":
+					result = await this.executeCreateFolder(vaultAction);
+					this.displayCreateFolderResult(container, result);
+					break;
+
+				case "rename":
+					result = await this.executeRename(vaultAction);
+					this.displayRenameResult(container, result);
+					break;
+
+				case "move":
+					result = await this.executeMove(vaultAction);
+					this.displayMoveResult(container, result);
+					break;
+
+				case "copy_file":
+					result = await this.executeCopyFile(vaultAction);
+					this.displayCopyResult(container, result);
+					break;
+
+				case "get_metadata":
+					result = await this.executeGetMetadata(vaultAction);
+					this.displayMetadataResult(container, result);
+					break;
+
 				default:
 					container.createEl("div", {
 						cls: "letta-tool-result-text",
@@ -6549,9 +6794,209 @@ class LettaChatView extends ItemView {
 		};
 	}
 
+	// Create a folder in the vault
+	async executeCreateFolder(action: any): Promise<any> {
+		const folderPath = action.folder_path;
+
+		// Check if parent folder is blocked
+		const parentPath = folderPath.substring(0, folderPath.lastIndexOf("/")) || "";
+		if (parentPath && this.plugin.isFolderBlocked(parentPath)) {
+			return { error: `Access denied: ${parentPath} is a restricted folder` };
+		}
+
+		// Check if folder already exists
+		const existing = this.app.vault.getAbstractFileByPath(folderPath);
+		if (existing) {
+			return { error: `Folder already exists: ${folderPath}` };
+		}
+
+		await this.app.vault.createFolder(folderPath);
+
+		return {
+			success: true,
+			path: folderPath,
+			action: "created",
+		};
+	}
+
+	// Rename a file or folder
+	async executeRename(action: any): Promise<any> {
+		const oldPath = action.old_path;
+		const newName = action.new_name;
+
+		// Check if folder is blocked
+		const folder = oldPath.substring(0, oldPath.lastIndexOf("/")) || "";
+		if (folder && this.plugin.isFolderBlocked(folder)) {
+			return { error: `Access denied: ${folder} is a restricted folder` };
+		}
+
+		const file = this.app.vault.getAbstractFileByPath(oldPath);
+		if (!file) {
+			return { error: `File or folder not found: ${oldPath}` };
+		}
+
+		// Require approval for rename
+		if (action.requires_approval && !this.plugin.settings.vaultToolsApprovedThisSession) {
+			const approved = await this.showVaultApprovalModal("rename", { oldPath, newName });
+			if (!approved) {
+				return { error: "User declined rename operation" };
+			}
+		}
+
+		// Calculate new path (preserve extension for files)
+		let newPath: string;
+		if (file instanceof TFile) {
+			const extension = file.extension;
+			const baseName = newName.endsWith(`.${extension}`) ? newName : `${newName}.${extension}`;
+			newPath = folder ? `${folder}/${baseName}` : baseName;
+		} else {
+			newPath = folder ? `${folder}/${newName}` : newName;
+		}
+
+		await this.app.fileManager.renameFile(file, newPath);
+
+		return {
+			success: true,
+			old_path: oldPath,
+			new_path: newPath,
+			action: "renamed",
+		};
+	}
+
+	// Move a file or folder to a new location
+	async executeMove(action: any): Promise<any> {
+		const sourcePath = action.source_path;
+		const destFolder = action.destination_folder;
+
+		// Check source folder
+		const sourceFolder = sourcePath.substring(0, sourcePath.lastIndexOf("/")) || "";
+		if (sourceFolder && this.plugin.isFolderBlocked(sourceFolder)) {
+			return { error: `Access denied: ${sourceFolder} is a restricted folder` };
+		}
+
+		// Check destination folder
+		if (this.plugin.isFolderBlocked(destFolder)) {
+			return { error: `Access denied: ${destFolder} is a restricted folder` };
+		}
+
+		const file = this.app.vault.getAbstractFileByPath(sourcePath);
+		if (!file) {
+			return { error: `File or folder not found: ${sourcePath}` };
+		}
+
+		// Require approval for move
+		if (action.requires_approval && !this.plugin.settings.vaultToolsApprovedThisSession) {
+			const approved = await this.showVaultApprovalModal("move", { sourcePath, destFolder });
+			if (!approved) {
+				return { error: "User declined move operation" };
+			}
+		}
+
+		// Calculate new path
+		const fileName = sourcePath.substring(sourcePath.lastIndexOf("/") + 1);
+		const newPath = destFolder ? `${destFolder}/${fileName}` : fileName;
+
+		// Create destination folder if needed
+		if (destFolder) {
+			const folderExists = this.app.vault.getAbstractFileByPath(destFolder);
+			if (!folderExists) {
+				await this.app.vault.createFolder(destFolder);
+			}
+		}
+
+		await this.app.fileManager.renameFile(file, newPath);
+
+		return {
+			success: true,
+			old_path: sourcePath,
+			new_path: newPath,
+			action: "moved",
+		};
+	}
+
+	// Copy a file to a new location
+	async executeCopyFile(action: any): Promise<any> {
+		const sourcePath = action.source_path;
+		const destPath = action.destination_path;
+
+		// Check source folder
+		const sourceFolder = sourcePath.substring(0, sourcePath.lastIndexOf("/")) || "";
+		if (sourceFolder && this.plugin.isFolderBlocked(sourceFolder)) {
+			return { error: `Access denied: ${sourceFolder} is a restricted folder` };
+		}
+
+		// Check destination folder
+		const destFolder = destPath.substring(0, destPath.lastIndexOf("/")) || "";
+		if (destFolder && this.plugin.isFolderBlocked(destFolder)) {
+			return { error: `Access denied: ${destFolder} is a restricted folder` };
+		}
+
+		const sourceFile = this.app.vault.getAbstractFileByPath(sourcePath);
+		if (!(sourceFile instanceof TFile)) {
+			return { error: `Source file not found: ${sourcePath}` };
+		}
+
+		// Check if destination exists
+		const destExists = this.app.vault.getAbstractFileByPath(destPath);
+		if (destExists) {
+			return { error: `Destination already exists: ${destPath}` };
+		}
+
+		// Create destination folder if needed
+		if (destFolder) {
+			const folderExists = this.app.vault.getAbstractFileByPath(destFolder);
+			if (!folderExists) {
+				await this.app.vault.createFolder(destFolder);
+			}
+		}
+
+		// Read source and create copy
+		const content = await this.app.vault.read(sourceFile);
+		await this.app.vault.create(destPath, content);
+
+		return {
+			success: true,
+			source: sourcePath,
+			destination: destPath,
+			action: "copied",
+		};
+	}
+
+	// Get file metadata without reading full content
+	async executeGetMetadata(action: any): Promise<any> {
+		const filePath = action.file_path;
+
+		// Check if folder is blocked
+		const folder = filePath.substring(0, filePath.lastIndexOf("/")) || "";
+		if (folder && this.plugin.isFolderBlocked(folder)) {
+			return { error: `Access denied: ${folder} is a restricted folder` };
+		}
+
+		const file = this.app.vault.getAbstractFileByPath(filePath);
+		if (!(file instanceof TFile)) {
+			return { error: `File not found: ${filePath}` };
+		}
+
+		const cache = this.app.metadataCache.getFileCache(file);
+
+		return {
+			path: file.path,
+			name: file.basename,
+			extension: file.extension,
+			size: file.stat.size,
+			created: file.stat.ctime,
+			modified: file.stat.mtime,
+			frontmatter: cache?.frontmatter || {},
+			tags: cache?.tags?.map((t: any) => t.tag) || [],
+			headings: cache?.headings?.map((h: any) => ({ level: h.level, heading: h.heading })) || [],
+			links: cache?.links?.map((l: any) => l.link) || [],
+			embeds: cache?.embeds?.map((e: any) => e.link) || [],
+		};
+	}
+
 	// Show approval modal for vault operations
 	async showVaultApprovalModal(
-		operation: "write" | "modify" | "delete",
+		operation: "write" | "modify" | "delete" | "rename" | "move",
 		details: any
 	): Promise<boolean> {
 		return new Promise((resolve) => {
@@ -6772,6 +7217,121 @@ class LettaChatView extends ItemView {
 			cls: "letta-vault-result-title",
 			text: `File ${result.action === "moved_to_trash" ? "moved to trash" : "deleted"}: ${result.path}`,
 		});
+	}
+
+	displayCreateFolderResult(container: HTMLElement, result: any): void {
+		container.empty();
+
+		if (result.error) {
+			container.createEl("div", {
+				cls: "letta-vault-result letta-vault-error",
+				text: result.error,
+			});
+			return;
+		}
+
+		const wrapper = container.createEl("div", { cls: "letta-vault-result" });
+		const header = wrapper.createEl("div", { cls: "letta-vault-result-header" });
+		header.createEl("span", { cls: "letta-vault-result-icon", text: "📁" });
+		header.createEl("span", {
+			cls: "letta-vault-result-title",
+			text: `Folder created: ${result.path}`,
+		});
+	}
+
+	displayRenameResult(container: HTMLElement, result: any): void {
+		container.empty();
+
+		if (result.error) {
+			container.createEl("div", {
+				cls: "letta-vault-result letta-vault-error",
+				text: result.error,
+			});
+			return;
+		}
+
+		const wrapper = container.createEl("div", { cls: "letta-vault-result" });
+		const header = wrapper.createEl("div", { cls: "letta-vault-result-header" });
+		header.createEl("span", { cls: "letta-vault-result-icon", text: "✏️" });
+		header.createEl("span", {
+			cls: "letta-vault-result-title",
+			text: `Renamed: ${result.old_path} → ${result.new_path}`,
+		});
+	}
+
+	displayMoveResult(container: HTMLElement, result: any): void {
+		container.empty();
+
+		if (result.error) {
+			container.createEl("div", {
+				cls: "letta-vault-result letta-vault-error",
+				text: result.error,
+			});
+			return;
+		}
+
+		const wrapper = container.createEl("div", { cls: "letta-vault-result" });
+		const header = wrapper.createEl("div", { cls: "letta-vault-result-header" });
+		header.createEl("span", { cls: "letta-vault-result-icon", text: "📦" });
+		header.createEl("span", {
+			cls: "letta-vault-result-title",
+			text: `Moved: ${result.old_path} → ${result.new_path}`,
+		});
+	}
+
+	displayCopyResult(container: HTMLElement, result: any): void {
+		container.empty();
+
+		if (result.error) {
+			container.createEl("div", {
+				cls: "letta-vault-result letta-vault-error",
+				text: result.error,
+			});
+			return;
+		}
+
+		const wrapper = container.createEl("div", { cls: "letta-vault-result" });
+		const header = wrapper.createEl("div", { cls: "letta-vault-result-header" });
+		header.createEl("span", { cls: "letta-vault-result-icon", text: "📋" });
+		header.createEl("span", {
+			cls: "letta-vault-result-title",
+			text: `Copied: ${result.source} → ${result.destination}`,
+		});
+	}
+
+	displayMetadataResult(container: HTMLElement, result: any): void {
+		container.empty();
+
+		if (result.error) {
+			container.createEl("div", {
+				cls: "letta-vault-result letta-vault-error",
+				text: result.error,
+			});
+			return;
+		}
+
+		const wrapper = container.createEl("div", { cls: "letta-vault-result" });
+		const header = wrapper.createEl("div", { cls: "letta-vault-result-header" });
+		header.createEl("span", { cls: "letta-vault-result-icon", text: "ℹ️" });
+		header.createEl("span", {
+			cls: "letta-vault-result-title",
+			text: `Metadata: ${result.name}`,
+		});
+
+		const details = wrapper.createEl("div", { cls: "letta-vault-metadata-details" });
+		details.createEl("div", { text: `Path: ${result.path}` });
+		details.createEl("div", { text: `Size: ${result.size} bytes` });
+		details.createEl("div", { text: `Created: ${new Date(result.created).toLocaleString()}` });
+		details.createEl("div", { text: `Modified: ${new Date(result.modified).toLocaleString()}` });
+		if (result.tags && result.tags.length > 0) {
+			details.createEl("div", { text: `Tags: ${result.tags.join(", ")}` });
+		}
+		if (result.links && result.links.length > 0) {
+			details.createEl("div", { text: `Links: ${result.links.length} outgoing links` });
+		}
+		if (result.headings && result.headings.length > 0) {
+			details.createEl("div", { text: `Headings: ${result.headings.length}` });
+		}
 	}
 
 	async createTempNoteForProposal(proposal: ObsidianNoteProposal): Promise<string> {
@@ -10291,7 +10851,7 @@ class LettaMemoryView extends ItemView {
 
 class VaultOperationApprovalModal extends Modal {
 	plugin: LettaPlugin;
-	operation: "write" | "modify" | "delete";
+	operation: "write" | "modify" | "delete" | "rename" | "move";
 	details: any;
 	callback: (approved: boolean, trustSession: boolean) => void;
 	trustSessionCheckbox: HTMLInputElement | null = null;
@@ -10299,7 +10859,7 @@ class VaultOperationApprovalModal extends Modal {
 	constructor(
 		app: App,
 		plugin: LettaPlugin,
-		operation: "write" | "modify" | "delete",
+		operation: "write" | "modify" | "delete" | "rename" | "move",
 		details: any,
 		callback: (approved: boolean, trustSession: boolean) => void
 	) {
@@ -10320,18 +10880,28 @@ class VaultOperationApprovalModal extends Modal {
 			write: "Approve File Write?",
 			modify: "Approve File Modification?",
 			delete: "Approve File Deletion?",
+			rename: "Approve Rename?",
+			move: "Approve Move?",
 		};
 		contentEl.createEl("h2", { text: titles[this.operation] });
 
 		// Warning icon and message
 		const warningDiv = contentEl.createEl("div", { cls: "letta-approval-warning" });
-		const warningIcon = this.operation === "delete" ? "⚠️" : "📝";
-		warningDiv.createEl("span", { cls: "letta-approval-icon", text: warningIcon });
+		const warningIcons: Record<string, string> = {
+			write: "📝",
+			modify: "📝",
+			delete: "⚠️",
+			rename: "✏️",
+			move: "📦",
+		};
+		warningDiv.createEl("span", { cls: "letta-approval-icon", text: warningIcons[this.operation] });
 
 		const operationDescriptions: Record<string, string> = {
 			write: "Your Letta agent wants to create or overwrite a file:",
 			modify: "Your Letta agent wants to modify a file:",
 			delete: "Your Letta agent wants to delete a file:",
+			rename: "Your Letta agent wants to rename a file or folder:",
+			move: "Your Letta agent wants to move a file or folder:",
 		};
 		warningDiv.createEl("span", { text: operationDescriptions[this.operation] });
 
@@ -10378,13 +10948,29 @@ class VaultOperationApprovalModal extends Modal {
 			deleteWarning.createEl("p", { text: "The file will be moved to Obsidian's trash folder." });
 		}
 
+		if (this.operation === "rename") {
+			const renameDiv = contentEl.createEl("div", { cls: "letta-approval-content" });
+			renameDiv.createEl("strong", { text: "Rename details:" });
+			const detailsList = renameDiv.createEl("ul");
+			detailsList.createEl("li", { text: `From: ${this.details.oldPath}` });
+			detailsList.createEl("li", { text: `To: ${this.details.newName}` });
+		}
+
+		if (this.operation === "move") {
+			const moveDiv = contentEl.createEl("div", { cls: "letta-approval-content" });
+			moveDiv.createEl("strong", { text: "Move details:" });
+			const detailsList = moveDiv.createEl("ul");
+			detailsList.createEl("li", { text: `Source: ${this.details.sourcePath}` });
+			detailsList.createEl("li", { text: `Destination: ${this.details.destFolder}` });
+		}
+
 		// Trust session checkbox
 		const checkboxDiv = contentEl.createEl("div", { cls: "letta-approval-checkbox" });
 		this.trustSessionCheckbox = checkboxDiv.createEl("input", { type: "checkbox" });
 		this.trustSessionCheckbox.id = "trust-session-checkbox";
 		const checkboxLabel = checkboxDiv.createEl("label");
 		checkboxLabel.setAttribute("for", "trust-session-checkbox");
-		checkboxLabel.setText("Trust this agent for the rest of this session (no more prompts for write/modify/delete)");
+		checkboxLabel.setText("Trust this agent for the rest of this session (no more prompts for vault operations)");
 
 		// Button container
 		const buttonContainer = contentEl.createEl("div", { cls: "modal-button-container" });
