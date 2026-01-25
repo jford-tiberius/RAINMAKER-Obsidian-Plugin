@@ -2,6 +2,32 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with this Obsidian plugin.
 
+## IMPORTANT: Use Sub-Agents by Default
+
+**Always delegate tasks to specialized sub-agents using the Task tool.** Do not run commands or searches directly when a sub-agent can handle them better.
+
+### Required Sub-Agent Usage
+- **Explore agent**: For ANY codebase investigation, finding files, understanding structure, or answering questions about the code
+- **Bash agent**: For git operations, builds, npm commands, and multi-step terminal tasks
+- **Plan agent**: For designing implementation approaches before coding
+- **code-review agent**: For reviewing code changes before commits
+- **build-error-resolver agent**: When builds or type checks fail
+- **tdd-guide agent**: When writing new features (tests first)
+- **security-reviewer agent**: After writing code handling user input, auth, or APIs
+
+### When to Use Sub-Agents
+- Exploring or searching the codebase → **Explore**
+- Git operations (commit, push, branch) → **Bash**
+- Running builds or tests → **Bash**
+- Planning a feature or refactor → **Plan**
+- Reviewing changes → **code-review**
+- Build failures → **build-error-resolver**
+
+### Exceptions (Direct Tool Use OK)
+- Reading a single known file path
+- Making a small, targeted edit
+- Quick glob for a specific filename
+
 ## Project Overview
 This is a Letta AI Agent plugin for Obsidian that allows users to chat with a stateful AI agent that knows their vault contents and remembers conversations. The plugin automatically syncs vault files to Letta and provides an integrated chat interface within Obsidian.
 
