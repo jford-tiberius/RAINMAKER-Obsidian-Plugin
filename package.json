@@ -1,6 +1,6 @@
 {
 	"name": "rainmaker-obsidian",
-	"version": "1.5.0",
+	"version": "1.9.0",
 	"description": "Obsidian plugin for chatting with Letta AI agents - fixed fork with race condition and memory leak fixes",
 	"main": "main.js",
 	"repository": {
