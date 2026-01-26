@@ -140,6 +140,7 @@ interface LettaPluginSettings {
 	autoConnect: boolean; // Control whether to auto-connect on startup
 	showReasoning: boolean; // Control whether reasoning messages are visible
 	enableStreaming: boolean; // Control whether to use streaming API responses
+	useTokenStreaming: boolean; // Use token-level streaming (ChatGPT-like) vs step streaming (full messages)
 	allowAgentCreation: boolean; // Control whether agent creation modal can be shown
 	askBeforeToolRegistration: boolean; // Ask for consent before registering vault tools
 	// Deprecated - use enableVaultTools instead
@@ -176,6 +177,7 @@ const DEFAULT_SETTINGS: LettaPluginSettings = {
 	autoConnect: false, // Default to not auto-connecting to avoid startup blocking
 	showReasoning: true, // Default to showing reasoning messages in tool interactions
 	enableStreaming: true, // Default to enabling streaming for real-time responses
+	useTokenStreaming: true, // Default to token streaming for real-time ChatGPT-like experience
 	allowAgentCreation: true, // Default to enabling agent creation modal
 	askBeforeToolRegistration: true, // Default to asking before registering vault tools
 	defaultNoteFolder: "lettamade", // Default folder for agent-created notes
@@ -1958,6 +1960,119 @@ export default class LettaPlugin extends Plugin {
 			return;
 		}
 
+		// Retry configuration
+		const maxRetries = 3;
+		const backoffDelays = [1000, 2000, 4000]; // ms
+		let lastError: Error | null = null;
+
+		// Emit retry status via onMessage for UI updates
+		const emitRetryStatus = (attempt: number, delay: number) => {
+			onMessage({
+				message_type: 'system_status',
+				status: 'reconnecting',
+				attempt,
+				maxRetries,
+				nextRetryMs: delay,
+			});
+		};
+
+		for (let attempt = 0; attempt <= maxRetries; attempt++) {
+			// Check if aborted before each attempt
+			if (abortSignal?.aborted) {
+				console.log("[Letta Stream] Request aborted during retry loop");
+				return;
+			}
+
+			if (attempt > 0) {
+				const delay = backoffDelays[attempt - 1] || backoffDelays[backoffDelays.length - 1];
+				console.log(`[Letta Stream] Retry attempt ${attempt}/${maxRetries} after ${delay}ms`);
+				emitRetryStatus(attempt, delay);
+				await new Promise(resolve => setTimeout(resolve, delay));
+
+				// Check again after delay
+				if (abortSignal?.aborted) {
+					console.log("[Letta Stream] Request aborted during retry delay");
+					return;
+				}
+			}
+
+			try {
+				await this.executeStreamingRequest(message, images, onMessage, onComplete, abortSignal);
+				return; // Success, exit retry loop
+			} catch (error: any) {
+				lastError = error;
+
+				// Don't retry on abort errors
+				if (error.name === 'AbortError' || abortSignal?.aborted) {
+					onComplete();
+					return;
+				}
+
+				// Only retry on transient network errors (not CORS, rate limits, etc.)
+				const isRetryable = this.isRetryableError(error);
+
+				if (attempt < maxRetries && isRetryable) {
+					console.warn(`[Letta Stream] Retryable error on attempt ${attempt + 1}:`, error.message);
+					continue; // Will retry
+				}
+
+				// Max retries reached or non-retryable error - call onError and throw
+				console.error(`[Letta Stream] Non-retryable error or max retries reached:`, error);
+				onError(error);
+				throw error;
+			}
+		}
+
+		// If we get here, all retries failed
+		if (lastError) {
+			onError(lastError);
+			throw lastError;
+		}
+	}
+
+	/**
+	 * Check if an error is retryable (transient network issues)
+	 */
+	private isRetryableError(error: any): boolean {
+		// Network errors
+		if (error instanceof TypeError && (
+			error.message.includes('NetworkError') ||
+			error.message.includes('fetch') ||
+			error.message.includes('Failed to fetch')
+		)) {
+			return true;
+		}
+
+		// Server errors (502, 503, 504)
+		const statusCode = error.statusCode || error.status;
+		if (statusCode === 502 || statusCode === 503 || statusCode === 504) {
+			return true;
+		}
+
+		// Connection reset/timeout
+		if (error.message?.includes('ECONNRESET') ||
+			error.message?.includes('ETIMEDOUT') ||
+			error.message?.includes('socket hang up')) {
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Execute the actual streaming request (extracted for retry logic)
+	 */
+	private async executeStreamingRequest(
+		message: string,
+		images: Array<{ base64: string; mediaType: string }> | undefined,
+		onMessage: (message: any) => void,
+		onComplete: () => void,
+		abortSignal?: AbortSignal,
+	): Promise<void> {
+		// These are checked in sendMessageToAgentStream but TypeScript needs them here too
+		if (!this.agent) throw new Error("Agent not connected");
+		if (!this.client) throw new Error("Client not initialized");
+
 		try {
 			// Build content - use array format if images are present
 			let content: any;
@@ -1994,7 +2109,7 @@ export default class LettaPlugin extends Plugin {
 							content,
 						},
 					],
-					streamTokens: true,
+					streamTokens: this.settings.useTokenStreaming,
 				},
 			);
 			console.log("[Letta Stream] Stream created successfully:", stream);
@@ -2004,6 +2119,7 @@ export default class LettaPlugin extends Plugin {
 				// RAINMAKER FIX: Check if stream was aborted
 				if (abortSignal?.aborted) {
 					console.log("[Letta Stream] Stream aborted mid-processing");
+					onComplete(); // Still call onComplete to finalize UI with partial content
 					return;
 				}
 
@@ -2028,6 +2144,12 @@ export default class LettaPlugin extends Plugin {
 			console.log("[Letta Stream] Stream ended normally");
 			onComplete();
 		} catch (error: any) {
+			// Handle abort errors gracefully - user intentionally stopped generation
+			if (error.name === 'AbortError' || abortSignal?.aborted) {
+				console.log("[Letta Stream] Stream aborted by user");
+				throw error; // Let retry loop handle this
+			}
+
 			console.error("[Letta Stream] Stream error:", error);
 			console.error("[Letta Stream] Error details:", {
 				message: error.message,
@@ -2047,12 +2169,12 @@ export default class LettaPlugin extends Plugin {
 				const corsError = new Error(
 					"CORS_ERROR: Network request failed, likely due to CORS restrictions. Falling back to non-streaming API.",
 				);
-				onError(corsError);
+				throw corsError; // Throw to let retry logic decide
 			} else if (error instanceof LettaError) {
 				// Handle Letta SDK errors - check for rate limiting and CORS issues
 				if (error.statusCode === 429) {
-					// This is a genuine rate limit error
-					onError(new Error(`HTTP 429: ${error.message}`));
+					// This is a genuine rate limit error - don't retry
+					throw new Error(`HTTP 429: ${error.message}`);
 				} else if (
 					error.statusCode === 0 ||
 					(error.statusCode === 429 &&
@@ -2062,12 +2184,12 @@ export default class LettaPlugin extends Plugin {
 					const corsError = new Error(
 						"CORS_ERROR: Cross-origin request blocked. Streaming not available from this origin. Falling back to non-streaming API.",
 					);
-					onError(corsError);
+					throw corsError;
 				} else {
-					onError(error);
+					throw error;
 				}
 			} else {
-				onError(error);
+				throw error;
 			}
 		}
 	}
@@ -2891,6 +3013,17 @@ class LettaChatView extends ItemView {
 	// RAINMAKER FIX: Track streaming requests to abort on agent switch
 	private streamAbortController: AbortController | null = null;
 	private currentStreamingAgentId: string | null = null;
+	// Streaming state for stop button and status indicators
+	private isActivelyStreaming: boolean = false;
+	private streamingPhase: 'idle' | 'reasoning' | 'generating' | 'tool_call' = 'idle';
+	private currentToolCallNameForStatus: string = '';
+	private streamingStepCount: number = 0;
+	private streamingTokenEstimate: number = 0;
+	private wasStreamingAborted: boolean = false;
+	// Render batching state for smooth streaming
+	private pendingRenderContent: string = '';
+	private renderScheduled: boolean = false;
+	private rafId: number | null = null;
 
 	// Tab bar UI elements for quick agent switching
 	private tabBar: HTMLElement | null = null;
@@ -3184,7 +3317,14 @@ class LettaChatView extends ItemView {
 		this.sendButton.createEl("span", { text: "Send" });
 
 		// Event listeners - RAINMAKER FIX: Added signal for cleanup
-		this.sendButton.addEventListener("click", () => this.sendMessage(), { signal });
+		// Handle both send and stop actions based on streaming state
+		this.sendButton.addEventListener("click", () => {
+			if (this.isActivelyStreaming) {
+				this.stopStreaming();
+			} else {
+				this.sendMessage();
+			}
+		}, { signal });
 
 		// Update status now that all UI elements are created
 		this.updateChatStatus();
@@ -5010,7 +5150,46 @@ class LettaChatView extends ItemView {
 		if (this.typingIndicator) {
 			const typingTextEl = this.typingIndicator.querySelector('.letta-typing-text');
 			if (typingTextEl) {
-				typingTextEl.textContent = `${this.plugin.settings.agentName} is thinking`;
+				// Show contextual status based on streaming phase
+				let statusText = `${this.plugin.settings.agentName} is thinking`;
+
+				if (this.isActivelyStreaming) {
+					switch (this.streamingPhase) {
+						case 'reasoning':
+							statusText = `${this.plugin.settings.agentName} is reasoning`;
+							break;
+						case 'generating':
+							statusText = `${this.plugin.settings.agentName} is responding`;
+							break;
+						case 'tool_call':
+							if (this.currentToolCallNameForStatus) {
+								// Format tool name for display (e.g., search_vault -> "Search Vault")
+								const toolDisplayName = this.currentToolCallNameForStatus
+									.replace(/_/g, ' ')
+									.replace(/\b\w/g, c => c.toUpperCase());
+								statusText = `Running ${toolDisplayName}...`;
+							} else {
+								statusText = `${this.plugin.settings.agentName} is using a tool`;
+							}
+							break;
+						default:
+							statusText = `${this.plugin.settings.agentName} is thinking`;
+					}
+
+					// Add step and token info if available
+					const stats: string[] = [];
+					if (this.streamingStepCount > 0) {
+						stats.push(`Step ${this.streamingStepCount}`);
+					}
+					if (this.streamingTokenEstimate > 0) {
+						stats.push(`${this.streamingTokenEstimate} tokens`);
+					}
+					if (stats.length > 0) {
+						statusText += ` (${stats.join(' · ')})`;
+					}
+				}
+
+				typingTextEl.textContent = statusText;
 			}
 		}
 	}
@@ -6329,6 +6508,11 @@ class LettaChatView extends ItemView {
 				const currentAgentId = this.plugin.settings.agentId;
 				this.currentStreamingAgentId = currentAgentId;
 
+				// Show stop button now that streaming is starting
+				this.showStopButton();
+				this.streamingStepCount = 0;
+				this.streamingTokenEstimate = 0;
+
 				await this.plugin.sendMessageToAgentStream(
 					processedMessage,
 					images.length > 0 ? images : undefined,
@@ -6478,11 +6662,9 @@ class LettaChatView extends ItemView {
 			// Hide typing indicator
 			this.hideTypingIndicator();
 
-			// Re-enable input
+			// Re-enable input and reset button state
 			this.messageInput.disabled = false;
-			this.sendButton.disabled = false;
-			this.sendButton.textContent = "Send";
-			this.sendButton.removeClass("letta-button-loading");
+			this.resetSendButton();
 			this.messageInput.focus();
 		}
 	}
@@ -9353,6 +9535,19 @@ class LettaChatView extends ItemView {
 			return;
 		}
 
+		// Handle system status messages (reconnecting, etc.)
+		if (message.message_type === "system_status") {
+			if (message.status === "reconnecting") {
+				// Show reconnecting status in typing indicator
+				this.streamingPhase = 'idle'; // Reset phase during reconnect
+				const typingTextEl = this.typingIndicator?.querySelector('.letta-typing-text');
+				if (typingTextEl) {
+					typingTextEl.textContent = `Reconnecting... (attempt ${message.attempt}/${message.maxRetries})`;
+				}
+			}
+			return;
+		}
+
 		// Filter out login messages - check both direct type and content containing login JSON
 		if (
 			message.type === "login" ||
@@ -9384,6 +9579,11 @@ class LettaChatView extends ItemView {
 			message.message_type === "usage_statistics" ||
 			message.messageType === "usage_statistics"
 		) {
+			// Track token count for live display
+			const completionTokens = message.completion_tokens || message.completionTokens || 0;
+			const promptTokens = message.prompt_tokens || message.promptTokens || 0;
+			this.streamingTokenEstimate = completionTokens + promptTokens;
+
 			// Received usage statistics
 			this.addUsageStatistics(message);
 			return;
@@ -9391,6 +9591,10 @@ class LettaChatView extends ItemView {
 
 		switch (message.message_type || message.messageType) {
 			case "reasoning_message":
+				// Update streaming phase to reasoning
+				this.streamingPhase = 'reasoning';
+				this.updateTypingIndicatorText();
+
 				if (message.reasoning) {
 					// For streaming, we accumulate reasoning and show it in real-time
 					this.updateOrCreateReasoningMessage(message.reasoning);
@@ -9399,6 +9603,16 @@ class LettaChatView extends ItemView {
 			case "tool_call_message":
 				const streamingToolCallData = message.tool_call || message.toolCall;
 				if (streamingToolCallData) {
+					// Update streaming phase to tool_call and track tool name
+					this.streamingPhase = 'tool_call';
+					const toolName = streamingToolCallData.name || streamingToolCallData.function?.name;
+					if (toolName) {
+						this.currentToolCallNameForStatus = toolName;
+						// Increment step count when a new tool call starts
+						this.streamingStepCount++;
+					}
+					this.updateTypingIndicatorText();
+
 					// Handle streaming tool call chunks
 					console.log("[Letta Plugin] Received tool_call_message:", streamingToolCallData);
 					this.handleStreamingToolCall(streamingToolCallData);
@@ -9425,6 +9639,10 @@ class LettaChatView extends ItemView {
 					this.currentToolCallArgs = "";
 					this.currentToolCallName = "";
 					this.currentToolCallData = null;
+					// Reset phase after tool completes (will be updated again if another message comes)
+					this.currentToolCallNameForStatus = '';
+					this.streamingPhase = 'idle';
+					this.updateTypingIndicatorText();
 				}
 				break;
 			case "approval_request_message":
@@ -9433,7 +9651,10 @@ class LettaChatView extends ItemView {
 				// await this.handleApprovalRequest(message);
 				break;
 			case "assistant_message":
-				// Processing streaming assistant message
+				// Update streaming phase to generating
+				this.streamingPhase = 'generating';
+				this.currentToolCallNameForStatus = ''; // Clear tool name when generating response
+				this.updateTypingIndicatorText();
 
 				// Try multiple possible content fields
 				let content =
@@ -9514,7 +9735,7 @@ class LettaChatView extends ItemView {
 		const processedContent = this.processEscapeSequences(content);
 		this.currentAssistantContent += processedContent;
 
-		// Create or update assistant message
+		// Create message element if it doesn't exist
 		if (!this.currentAssistantMessageEl) {
 			this.currentAssistantMessageEl = this.chatContainer.createEl(
 				"div",
@@ -9552,6 +9773,23 @@ class LettaChatView extends ItemView {
 			bubbleEl.createEl("div", { cls: "letta-message-content" });
 		}
 
+		// Use render batching for smoother performance
+		// Schedule a render if not already scheduled
+		if (!this.renderScheduled) {
+			this.renderScheduled = true;
+			this.rafId = requestAnimationFrame(() => this.flushPendingRender());
+		}
+	}
+
+	/**
+	 * Flush pending content to DOM using batched rendering
+	 */
+	private async flushPendingRender() {
+		this.renderScheduled = false;
+		this.rafId = null;
+
+		if (!this.currentAssistantMessageEl) return;
+
 		// Update the assistant content with markdown formatting
 		const contentEl = this.currentAssistantMessageEl.querySelector(
 			".letta-message-content",
@@ -9561,13 +9799,11 @@ class LettaChatView extends ItemView {
 			await this.renderMarkdownContent(contentEl as HTMLElement, this.currentAssistantContent);
 		}
 
-		// Scroll to bottom
-		setTimeout(() => {
-			this.chatContainer.scrollTo({
-				top: this.chatContainer.scrollHeight,
-				behavior: "smooth",
-			});
-		}, 10);
+		// Scroll to bottom with smooth behavior
+		this.chatContainer.scrollTo({
+			top: this.chatContainer.scrollHeight,
+			behavior: "smooth",
+		});
 	}
 
 	createStreamingToolInteraction(toolCall: any) {
@@ -10023,7 +10259,7 @@ class LettaChatView extends ItemView {
 				this.plugin.agent.id,
 				{
 					messages: [approvalMessage as any],
-					streamTokens: true,
+					streamTokens: this.plugin.settings.useTokenStreaming,
 				},
 			);
 
@@ -10170,6 +10406,39 @@ class LettaChatView extends ItemView {
 	}
 
 	markStreamingComplete() {
+		// Reset streaming state
+		this.isActivelyStreaming = false;
+		this.streamingPhase = 'idle';
+		this.currentToolCallNameForStatus = '';
+
+		// Cancel any pending RAF and flush remaining content synchronously
+		if (this.rafId !== null) {
+			cancelAnimationFrame(this.rafId);
+			this.rafId = null;
+		}
+		this.renderScheduled = false;
+		// Synchronously render any remaining content
+		if (this.currentAssistantMessageEl) {
+			const contentEl = this.currentAssistantMessageEl.querySelector(".letta-message-content");
+			if (contentEl && this.currentAssistantContent) {
+				this.renderMarkdownContent(contentEl as HTMLElement, this.currentAssistantContent);
+			}
+		}
+
+		// If streaming was aborted, add a notice to the partial content
+		if (this.wasStreamingAborted && this.currentAssistantMessageEl) {
+			// Add aborted notice to the message
+			const bubbleEl = this.currentAssistantMessageEl.querySelector(".letta-message-bubble");
+			if (bubbleEl) {
+				const abortedNotice = bubbleEl.createEl("div", {
+					cls: "letta-streaming-aborted-notice",
+					text: "⏹ Generation stopped",
+				});
+			}
+			this.currentAssistantMessageEl.classList.add("streaming-aborted");
+		}
+		this.wasStreamingAborted = false;
+
 		// If we have accumulated reasoning content, rebuild the assistant message with proper reasoning structure
 		if (this.currentAssistantMessageEl && this.assistantReasoningContent && this.currentAssistantContent) {
 			// Remove the current streaming message
@@ -10194,6 +10463,46 @@ class LettaChatView extends ItemView {
 
 		// Hide typing indicator
 		this.hideTypingIndicator();
+
+		// Reset button state
+		this.resetSendButton();
+	}
+
+	/**
+	 * Transform send button to stop button when streaming begins
+	 */
+	private showStopButton() {
+		this.isActivelyStreaming = true;
+		this.sendButton.disabled = false;
+		this.sendButton.textContent = "";
+		this.sendButton.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg><span>Stop</span>`;
+		this.sendButton.removeClass("letta-button-loading");
+		this.sendButton.addClass("letta-button-stop");
+	}
+
+	/**
+	 * Reset send button to normal state
+	 */
+	private resetSendButton() {
+		this.isActivelyStreaming = false;
+		this.sendButton.disabled = false;
+		this.sendButton.innerHTML = "";
+		this.sendButton.textContent = "";
+		this.sendButton.createEl("span", { text: "Send" });
+		this.sendButton.removeClass("letta-button-loading");
+		this.sendButton.removeClass("letta-button-stop");
+	}
+
+	/**
+	 * Handle stop button click to abort streaming
+	 */
+	private stopStreaming() {
+		if (this.streamAbortController && this.isActivelyStreaming) {
+			console.log("[Letta Plugin] User stopped generation");
+			this.wasStreamingAborted = true;
+			this.streamAbortController.abort();
+			// markStreamingComplete will be called by the error handler or completion handler
+		}
 	}
 
 	addUsageStatistics(usageMessage: any) {
@@ -13270,6 +13579,20 @@ class LettaSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.enableStreaming)
 					.onChange(async (value) => {
 						this.plugin.settings.enableStreaming = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Token Streaming Mode")
+			.setDesc(
+				"When enabled, responses stream word-by-word (ChatGPT-like). When disabled, responses arrive as complete messages per step (faster on some providers).",
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.useTokenStreaming)
+					.onChange(async (value) => {
+						this.plugin.settings.useTokenStreaming = value;
 						await this.plugin.saveSettings();
 					}),
 			);

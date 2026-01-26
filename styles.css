@@ -820,6 +820,35 @@
     100% { left: 100%; }
 }
 
+/* Stop button styling */
+.letta-button-stop {
+    background: var(--text-error) !important;
+    color: white !important;
+}
+
+.letta-button-stop:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--text-error) 85%, black) !important;
+}
+
+.letta-button-stop svg {
+    flex-shrink: 0;
+}
+
+/* Streaming aborted notice */
+.letta-streaming-aborted-notice {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: color-mix(in srgb, var(--text-muted) 15%, transparent);
+    border-radius: 6px;
+    font-size: 0.85em;
+    color: var(--text-muted);
+    border-left: 3px solid var(--text-muted);
+}
+
+.letta-message-assistant.streaming-aborted .letta-message-bubble {
+    border-color: var(--text-muted);
+}
+
 
 /* Chat Messages - Modern Bubble Style */
 .letta-message {
