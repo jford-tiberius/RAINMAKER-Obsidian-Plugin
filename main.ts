@@ -1478,9 +1478,16 @@ export default class LettaPlugin extends Plugin {
 		onMessage: (message: any) => void,
 		onError: (error: Error) => void,
 		onComplete: () => void,
+		abortSignal?: AbortSignal,
 	): Promise<void> {
 		if (!this.agent) throw new Error("Agent not connected");
 		if (!this.client) throw new Error("Client not initialized");
+
+		// Check if already aborted before starting
+		if (abortSignal?.aborted) {
+			console.log("[Letta Stream] Request aborted before starting");
+			return;
+		}
 
 		try {
 			// Build content - use array format if images are present
@@ -1525,6 +1532,12 @@ export default class LettaPlugin extends Plugin {
 
 			// Process the stream
 			for await (const chunk of stream) {
+				// RAINMAKER FIX: Check if stream was aborted
+				if (abortSignal?.aborted) {
+					console.log("[Letta Stream] Stream aborted mid-processing");
+					return;
+				}
+
 				console.log("[Letta Stream] Chunk received:", chunk);
 				console.log("[Letta Stream] Chunk type:", typeof chunk);
 
@@ -2381,6 +2394,9 @@ class LettaChatView extends ItemView {
 	private switchingToAgentName: string | null = null;
 	private switchButton: HTMLElement | null = null;
 	private agentAvatar: HTMLElement | null = null;
+	// RAINMAKER FIX: Track streaming requests to abort on agent switch
+	private streamAbortController: AbortController | null = null;
+	private currentStreamingAgentId: string | null = null;
 
 	// Tab bar UI elements for quick agent switching
 	private tabBar: HTMLElement | null = null;
@@ -5466,14 +5482,33 @@ class LettaChatView extends ItemView {
 				// Reset streaming state (now safe since we completed above)
 				this.resetStreamingState();
 
+				// RAINMAKER FIX: Create abort controller and track current agent
+				// Abort any previous controller first
+				if (this.streamAbortController) {
+					this.streamAbortController.abort();
+				}
+				this.streamAbortController = new AbortController();
+				const currentAgentId = this.plugin.settings.agentId;
+				this.currentStreamingAgentId = currentAgentId;
+
 				await this.plugin.sendMessageToAgentStream(
 					message,
 					images.length > 0 ? images : undefined,
 					async (message) => {
+						// RAINMAKER FIX: Check if still same agent before processing
+						if (this.currentStreamingAgentId !== currentAgentId) {
+							console.log("[Letta Plugin] Ignoring streaming message from stale agent");
+							return;
+						}
 						// Handle each streaming message
 						await this.processStreamingMessage(message);
 					},
 					async (error) => {
+						// RAINMAKER FIX: Ignore errors from aborted/stale requests
+						if (this.currentStreamingAgentId !== currentAgentId) {
+							console.log("[Letta Plugin] Ignoring streaming error from stale agent");
+							return;
+						}
 						// Handle streaming error
 						console.error("Streaming error:", error);
 
@@ -5514,9 +5549,15 @@ class LettaChatView extends ItemView {
 						}
 					},
 					() => {
+						// RAINMAKER FIX: Check if still same agent before completing
+						if (this.currentStreamingAgentId !== currentAgentId) {
+							console.log("[Letta Plugin] Ignoring streaming completion from stale agent");
+							return;
+						}
 						// Handle streaming completion
 						this.markStreamingComplete();
 					},
+					this.streamAbortController.signal,
 				);
 			} else {
 				// Use non-streaming API for more stable responses
@@ -10097,6 +10138,26 @@ class LettaChatView extends ItemView {
 		const projectSlug = project?.slug || this.plugin.settings.lettaProjectSlug;
 
 		console.log(`[Letta Plugin] Switching to agent: ${agentName} (ID: ${agentId})`);
+
+		// RAINMAKER FIX: Abort any in-flight streaming request before switching
+		if (this.streamAbortController) {
+			console.log("[Letta Plugin] Aborting in-flight streaming request before agent switch");
+			this.streamAbortController.abort();
+			this.streamAbortController = null;
+		}
+		// Reset streaming agent ID
+		this.currentStreamingAgentId = null;
+
+		// Reset UI state if stuck in sending mode
+		if (this.sendButton && this.sendButton.textContent === "Sending...") {
+			this.sendButton.textContent = "Send";
+			this.sendButton.disabled = false;
+			this.sendButton.removeClass("letta-button-loading");
+		}
+		if (this.messageInput) {
+			this.messageInput.disabled = false;
+		}
+		this.hideTypingIndicator();
 
 		// Show switching state
 		this.showSwitchingState(agentName);
