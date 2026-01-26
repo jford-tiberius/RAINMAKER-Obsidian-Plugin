@@ -195,6 +195,194 @@ const DEFAULT_SETTINGS: LettaPluginSettings = {
 	cacheMaxMessages: 200,  // Cache up to 200 messages per agent
 };
 
+// File attachment types for chat
+type AttachmentType = 'image' | 'text' | 'pdf' | 'office-doc' | 'office-sheet' | 'office-ppt';
+
+interface PendingAttachment {
+	file: File;
+	type: AttachmentType;
+	base64?: string;        // For images
+	extractedText?: string; // For text/office files
+	originalPath?: string;  // Path where original was saved in vault
+	previewEl: HTMLElement;
+	size: number;
+}
+
+// File processing utilities
+class FileProcessor {
+	/**
+	 * Detect file type from extension and MIME type
+	 */
+	static detectFileType(file: File): AttachmentType {
+		const ext = file.name.split('.').pop()?.toLowerCase() || '';
+		const mimeType = file.type.toLowerCase();
+
+		// Images
+		if (mimeType.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) {
+			return 'image';
+		}
+
+		// PDF
+		if (ext === 'pdf' || mimeType === 'application/pdf') {
+			return 'pdf';
+		}
+
+		// Office documents
+		if (ext === 'docx' || mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+			return 'office-doc';
+		}
+
+		// Office spreadsheets
+		if (['xlsx', 'xls', 'csv'].includes(ext) ||
+			mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+			mimeType === 'text/csv') {
+			return 'office-sheet';
+		}
+
+		// Office presentations
+		if (ext === 'pptx' || mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+			return 'office-ppt';
+		}
+
+		// Default to text for txt, md, json and unknown
+		return 'text';
+	}
+
+	/**
+	 * Get file type icon for preview
+	 */
+	static getFileIcon(type: AttachmentType): string {
+		switch (type) {
+			case 'image': return '🖼️';
+			case 'pdf': return '📄';
+			case 'office-doc': return '📝';
+			case 'office-sheet': return '📊';
+			case 'office-ppt': return '📽️';
+			case 'text': return '📃';
+			default: return '📎';
+		}
+	}
+
+	/**
+	 * Format file size for display
+	 */
+	static formatFileSize(bytes: number): string {
+		if (bytes < 1024) return bytes + ' B';
+		if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+		return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+	}
+
+	/**
+	 * Check if file type is supported
+	 */
+	static isSupportedType(file: File): boolean {
+		const ext = file.name.split('.').pop()?.toLowerCase() || '';
+		const supportedExtensions = [
+			// Images
+			'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg',
+			// Documents
+			'pdf', 'txt', 'md', 'json',
+			// Office
+			'docx', 'xlsx', 'xls', 'csv', 'pptx'
+		];
+		return supportedExtensions.includes(ext) || file.type.startsWith('image/');
+	}
+
+	/**
+	 * Extract text from a file based on its type
+	 */
+	static async extractText(file: File, type: AttachmentType): Promise<string> {
+		switch (type) {
+			case 'text':
+				return await FileProcessor.extractTextFile(file);
+			case 'office-doc':
+				return await FileProcessor.extractDocx(file);
+			case 'office-sheet':
+				return await FileProcessor.extractXlsx(file);
+			case 'office-ppt':
+				return await FileProcessor.extractPptx(file);
+			default:
+				return '';
+		}
+	}
+
+	/**
+	 * Extract text from plain text files (txt, md, json)
+	 */
+	static async extractTextFile(file: File): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(reader.result as string);
+			reader.onerror = () => reject(new Error('Failed to read text file'));
+			reader.readAsText(file);
+		});
+	}
+
+	/**
+	 * Extract text from DOCX files using mammoth
+	 */
+	static async extractDocx(file: File): Promise<string> {
+		try {
+			// Dynamic import to avoid loading if not needed
+			const mammoth = await import('mammoth');
+			const arrayBuffer = await file.arrayBuffer();
+			const result = await mammoth.extractRawText({ arrayBuffer });
+			return result.value;
+		} catch (error) {
+			console.error('[FileProcessor] Failed to extract DOCX:', error);
+			return `[Error extracting ${file.name}: ${error.message}]`;
+		}
+	}
+
+	/**
+	 * Extract text from XLSX/CSV files using xlsx
+	 */
+	static async extractXlsx(file: File): Promise<string> {
+		try {
+			// Dynamic import to avoid loading if not needed
+			const XLSX = await import('xlsx');
+			const arrayBuffer = await file.arrayBuffer();
+
+			// Check if it's a CSV file
+			const ext = file.name.split('.').pop()?.toLowerCase();
+			if (ext === 'csv') {
+				// Read CSV as text first for better handling
+				const text = await file.text();
+				const workbook = XLSX.read(text, { type: 'string' });
+				const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+				return XLSX.utils.sheet_to_csv(firstSheet);
+			}
+
+			const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+			const results: string[] = [];
+
+			// Process each sheet
+			for (const sheetName of workbook.SheetNames) {
+				const sheet = workbook.Sheets[sheetName];
+				const csv = XLSX.utils.sheet_to_csv(sheet);
+				if (csv.trim()) {
+					results.push(`## Sheet: ${sheetName}\n\n${csv}`);
+				}
+			}
+
+			return results.join('\n\n---\n\n');
+		} catch (error) {
+			console.error('[FileProcessor] Failed to extract XLSX:', error);
+			return `[Error extracting ${file.name}: ${error.message}]`;
+		}
+	}
+
+	/**
+	 * Extract text from PPTX files
+	 * Note: PPTX parsing is limited - original file is saved to vault for custom tool access
+	 */
+	static async extractPptx(file: File): Promise<string> {
+		// PPTX parsing requires specialized library (not included to keep bundle small)
+		// Original file will be saved to vault for custom Letta tools to process
+		return `[PowerPoint presentation: ${file.name}]\n[Note: Full PPTX parsing requires custom tools. Original file will be saved to vault for future access.]`;
+	}
+}
+
 interface LettaAgent {
 	id: string;
 	name: string;
@@ -2627,7 +2815,11 @@ class LettaChatView extends ItemView {
 	private abortController: AbortController | null = null;
 	// RAINMAKER FIX: Prevent concurrent message loads
 	private isLoadingMessages: boolean = false;
-	// Image paste support
+	// File attachment support (images and documents)
+	private pendingAttachments: PendingAttachment[] = [];
+	private attachmentPreviewContainer: HTMLElement | null = null;
+	private fileInput: HTMLInputElement | null = null;
+	// Legacy image support (for backward compatibility)
 	private pendingImages: Array<{
 		blob: Blob;
 		base64: string;
@@ -2870,15 +3062,39 @@ class LettaChatView extends ItemView {
 		// Now that chat container exists, update status to show disconnected message if needed
 		this.updateChatStatus();
 
-		// Image preview container (for pasted images)
-		this.imagePreviewContainer = container.createEl("div", {
-			cls: "letta-image-preview-container",
+		// Attachment preview container (for files and images)
+		this.attachmentPreviewContainer = container.createEl("div", {
+			cls: "letta-attachment-preview-container",
 		});
+		// Legacy reference for backward compatibility
+		this.imagePreviewContainer = this.attachmentPreviewContainer;
 
 		// Input container
 		this.inputContainer = container.createEl("div", {
 			cls: "letta-input-container",
 		});
+
+		// Hidden file input for attachment button
+		this.fileInput = this.inputContainer.createEl("input", {
+			cls: "letta-file-input",
+			attr: {
+				type: "file",
+				multiple: "true",
+				accept: ".png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,.pdf,.txt,.md,.json,.docx,.xlsx,.xls,.csv,.pptx",
+				style: "display: none;",
+			},
+		}) as HTMLInputElement;
+
+		// File input change handler
+		this.fileInput.addEventListener("change", async () => {
+			if (this.fileInput?.files) {
+				for (const file of Array.from(this.fileInput.files)) {
+					await this.addAttachment(file);
+				}
+				// Reset input so same file can be selected again
+				this.fileInput.value = "";
+			}
+		}, { signal });
 
 		this.messageInput = this.inputContainer.createEl("textarea", {
 			cls: "letta-message-input",
@@ -2891,6 +3107,19 @@ class LettaChatView extends ItemView {
 		const buttonContainer = this.inputContainer.createEl("div", {
 			cls: "letta-button-container",
 		});
+
+		// Attachment button (📎)
+		const attachButton = buttonContainer.createEl("button", {
+			cls: "letta-attach-button",
+			attr: {
+				"aria-label": "Attach file",
+				"title": "Attach files (images, PDFs, documents)",
+			},
+		});
+		attachButton.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>`;
+		attachButton.addEventListener("click", () => {
+			this.fileInput?.click();
+		}, { signal });
 
 		this.sendButton = buttonContainer.createEl("button", {
 			cls: "letta-send-button",
@@ -2941,22 +3170,56 @@ class LettaChatView extends ItemView {
 			this.handleAutocompleteInput();
 		}, { signal });
 
-		// Handle image paste
+		// Handle file paste (images and other files)
 		this.messageInput.addEventListener("paste", async (evt) => {
 			const clipboardData = evt.clipboardData;
 			if (!clipboardData) return;
 
 			const items = clipboardData.items;
 			for (let i = 0; i < items.length; i++) {
-				if (items[i].type.startsWith("image/")) {
+				const file = items[i].getAsFile();
+				if (file) {
 					evt.preventDefault();
-					const blob = items[i].getAsFile();
-					if (blob) {
-						await this.addPastedImage(blob);
-					}
+					await this.addAttachment(file);
 				}
 			}
 		}, { signal });
+
+		// Drag and drop support for the entire chat container
+		const chatContainer = this.chatContainer;
+		if (chatContainer) {
+			// Drag over - show visual feedback
+			chatContainer.addEventListener("dragover", (evt) => {
+				evt.preventDefault();
+				evt.stopPropagation();
+				chatContainer.addClass("letta-drag-over");
+			}, { signal });
+
+			// Drag leave - remove visual feedback
+			chatContainer.addEventListener("dragleave", (evt) => {
+				evt.preventDefault();
+				evt.stopPropagation();
+				// Only remove class if leaving the container (not entering a child)
+				const relatedTarget = evt.relatedTarget as HTMLElement;
+				if (!chatContainer.contains(relatedTarget)) {
+					chatContainer.removeClass("letta-drag-over");
+				}
+			}, { signal });
+
+			// Drop - handle dropped files
+			chatContainer.addEventListener("drop", async (evt) => {
+				evt.preventDefault();
+				evt.stopPropagation();
+				chatContainer.removeClass("letta-drag-over");
+
+				const files = evt.dataTransfer?.files;
+				if (files) {
+					for (const file of Array.from(files)) {
+						await this.addAttachment(file);
+					}
+				}
+			}, { signal });
+		}
 
 		// Start with empty chat
 	}
@@ -2974,8 +3237,8 @@ class LettaChatView extends ItemView {
 			this.heartbeatTimeout = null;
 		}
 
-		// Clean up pending images
-		this.clearPendingImages();
+		// Clean up pending attachments and images
+		this.clearPendingAttachments();
 	}
 
 	/**
@@ -3040,6 +3303,232 @@ class LettaChatView extends ItemView {
 			i.previewEl.remove();
 		});
 		this.pendingImages = [];
+	}
+
+	/**
+	 * Add a file attachment (image or document)
+	 */
+	async addAttachment(file: File) {
+		// Check if file type is supported
+		if (!FileProcessor.isSupportedType(file)) {
+			new Notice(`Unsupported file type: ${file.name}`);
+			return;
+		}
+
+		const type = FileProcessor.detectFileType(file);
+
+		if (!this.attachmentPreviewContainer) return;
+
+		// Create preview element
+		const previewEl = this.attachmentPreviewContainer.createDiv({
+			cls: "letta-attachment-preview",
+		});
+
+		const attachment: PendingAttachment = {
+			file,
+			type,
+			size: file.size,
+			previewEl,
+		};
+
+		// Handle based on type
+		if (type === 'image') {
+			// For images, show thumbnail preview
+			const base64 = await this.blobToBase64(file);
+			attachment.base64 = base64;
+
+			const img = previewEl.createEl("img", {
+				cls: "letta-preview-image",
+				attr: { src: URL.createObjectURL(file) },
+			});
+
+			// Also add to legacy pendingImages for backward compatibility
+			const legacyData = {
+				blob: file,
+				base64,
+				mediaType: file.type,
+				previewEl,
+			};
+			this.pendingImages.push(legacyData);
+
+		} else {
+			// For non-images, show file icon and name
+			previewEl.addClass("letta-file-preview");
+
+			const iconEl = previewEl.createEl("span", {
+				cls: "letta-file-icon",
+				text: FileProcessor.getFileIcon(type),
+			});
+
+			const infoEl = previewEl.createDiv({ cls: "letta-file-info" });
+			infoEl.createEl("span", {
+				cls: "letta-file-name",
+				text: file.name.length > 20 ? file.name.substring(0, 17) + "..." : file.name,
+				attr: { title: file.name },
+			});
+			infoEl.createEl("span", {
+				cls: "letta-file-size",
+				text: FileProcessor.formatFileSize(file.size),
+			});
+
+			// Show processing indicator
+			const processingEl = previewEl.createEl("span", {
+				cls: "letta-file-processing",
+				text: "...",
+			});
+
+			// Extract text in background
+			try {
+				if (type !== 'pdf') {
+					attachment.extractedText = await FileProcessor.extractText(file, type);
+					processingEl.setText("✓");
+					processingEl.addClass("letta-file-ready");
+				} else {
+					// PDFs will be uploaded to Letta folder
+					processingEl.setText("📤");
+					processingEl.addClass("letta-file-upload");
+					processingEl.title = "Will be uploaded to Letta";
+				}
+			} catch (error) {
+				console.error('[Letta] Failed to process file:', error);
+				processingEl.setText("⚠");
+				processingEl.addClass("letta-file-error");
+				processingEl.title = `Error: ${error.message}`;
+			}
+		}
+
+		// Add remove button
+		const removeBtn = previewEl.createEl("button", {
+			cls: "letta-attachment-remove",
+			text: "×",
+			attr: { "aria-label": "Remove attachment" },
+		});
+
+		this.pendingAttachments.push(attachment);
+
+		removeBtn.addEventListener("click", () => {
+			// Clean up
+			const img = previewEl.querySelector("img");
+			if (img) URL.revokeObjectURL(img.src);
+
+			this.pendingAttachments = this.pendingAttachments.filter(a => a !== attachment);
+
+			// Also remove from legacy pendingImages if it was an image
+			if (type === 'image') {
+				this.pendingImages = this.pendingImages.filter(i => i.previewEl !== previewEl);
+			}
+
+			previewEl.remove();
+		});
+	}
+
+	/**
+	 * Clear all pending attachments
+	 */
+	clearPendingAttachments() {
+		this.pendingAttachments.forEach(a => {
+			const img = a.previewEl.querySelector("img");
+			if (img) URL.revokeObjectURL(img.src);
+			a.previewEl.remove();
+		});
+		this.pendingAttachments = [];
+		// Also clear legacy images
+		this.pendingImages = [];
+	}
+
+	/**
+	 * Save original file to vault for future custom tool access
+	 */
+	async saveOriginalToVault(file: File): Promise<string | null> {
+		try {
+			const folderPath = '_letta_attachments';
+
+			// Ensure folder exists
+			let folder = this.plugin.app.vault.getAbstractFileByPath(folderPath);
+			if (!folder) {
+				await this.plugin.app.vault.createFolder(folderPath);
+			}
+
+			// Create unique filename with timestamp
+			const timestamp = Date.now();
+			const filename = `${timestamp}_${file.name}`;
+			const filePath = `${folderPath}/${filename}`;
+
+			// Save file
+			const arrayBuffer = await file.arrayBuffer();
+			await this.plugin.app.vault.createBinary(filePath, new Uint8Array(arrayBuffer));
+
+			console.log(`[Letta] Saved original file to: ${filePath}`);
+			return filePath;
+		} catch (error) {
+			console.error('[Letta] Failed to save original file:', error);
+			return null;
+		}
+	}
+
+	/**
+	 * Build message content with attachments
+	 */
+	async buildMessageWithAttachments(text: string): Promise<{
+		content: any[];
+		images: Array<{ base64: string; mediaType: string }>;
+	}> {
+		const content: any[] = [{ type: "text", text }];
+		const images: Array<{ base64: string; mediaType: string }> = [];
+		const attachmentNotes: string[] = [];
+
+		for (const attachment of this.pendingAttachments) {
+			if (attachment.type === 'image' && attachment.base64) {
+				// Images: add to multimodal content
+				images.push({
+					base64: attachment.base64,
+					mediaType: attachment.file.type,
+				});
+			} else if (attachment.type === 'pdf') {
+				// PDFs: save to vault and note for agent
+				const savedPath = await this.saveOriginalToVault(attachment.file);
+				if (savedPath) {
+					attachmentNotes.push(
+						`[PDF "${attachment.file.name}" saved to vault at: ${savedPath}. ` +
+						`Use archival_memory_search or custom tools to access content.]`
+					);
+				}
+			} else if (attachment.extractedText) {
+				// Text/Office files with extracted content
+				const textLength = attachment.extractedText.length;
+
+				// Save original for office files
+				if (attachment.type.startsWith('office-')) {
+					attachment.originalPath = await this.saveOriginalToVault(attachment.file) || undefined;
+				}
+
+				if (textLength < 10000) {
+					// Small files: include inline
+					attachmentNotes.push(
+						`\n---\n**Attached file: ${attachment.file.name}**\n\`\`\`\n${attachment.extractedText}\n\`\`\``
+					);
+					if (attachment.originalPath) {
+						attachmentNotes.push(`(Original file saved at: ${attachment.originalPath})`);
+					}
+				} else {
+					// Large files: just note the path
+					attachmentNotes.push(
+						`[File "${attachment.file.name}" is large (${FileProcessor.formatFileSize(textLength)}). ` +
+						`Content excerpt (first 2000 chars):\n\`\`\`\n${attachment.extractedText.substring(0, 2000)}...\n\`\`\`]`
+					);
+					if (attachment.originalPath) {
+						attachmentNotes.push(`(Full file saved at: ${attachment.originalPath} for tool access)`);
+					}
+				}
+			}
+		}
+
+		// Append attachment notes to text content
+		if (attachmentNotes.length > 0) {
+			content[0].text += '\n' + attachmentNotes.join('\n');
+		}
+
+		return { content, images };
 	}
 
 	/**
@@ -5679,13 +6168,25 @@ class LettaChatView extends ItemView {
 			return;
 		}
 
-		// Extract pending images before sending
-		const images = this.pendingImages.map(i => ({
-			base64: i.base64,
-			mediaType: i.mediaType,
-		}));
-		// Clear pending images (and their preview elements)
-		this.clearPendingImages();
+		// Process attachments (images and documents)
+		let images: Array<{ base64: string; mediaType: string }> = [];
+		let processedMessage = message;
+
+		if (this.pendingAttachments.length > 0) {
+			const result = await this.buildMessageWithAttachments(message);
+			images = result.images;
+			// Extract the text content which now includes attachment info
+			processedMessage = result.content[0].text;
+		} else {
+			// Fallback to legacy image handling
+			images = this.pendingImages.map(i => ({
+				base64: i.base64,
+				mediaType: i.mediaType,
+			}));
+		}
+
+		// Clear all pending attachments
+		this.clearPendingAttachments();
 
 		// Disable input while processing
 		this.messageInput.disabled = true;
@@ -5694,7 +6195,7 @@ class LettaChatView extends ItemView {
 		this.sendButton.addClass("letta-button-loading");
 
 		// Add user message to chat (with images if any)
-		await this.addMessage("user", message, undefined, undefined, images.length > 0 ? images : undefined);
+		await this.addMessage("user", processedMessage, undefined, undefined, images.length > 0 ? images : undefined);
 
 		// Show typing indicator immediately after user message
 		this.showTypingIndicator();
@@ -5742,7 +6243,7 @@ class LettaChatView extends ItemView {
 				this.currentStreamingAgentId = currentAgentId;
 
 				await this.plugin.sendMessageToAgentStream(
-					message,
+					processedMessage,
 					images.length > 0 ? images : undefined,
 					async (message) => {
 						// RAINMAKER FIX: Check if still same agent before processing
@@ -5812,7 +6313,7 @@ class LettaChatView extends ItemView {
 			} else {
 				// Use non-streaming API for more stable responses
 				// Sending message via non-streaming API
-				const messages = await this.plugin.sendMessageToAgent(message, images.length > 0 ? images : undefined);
+				const messages = await this.plugin.sendMessageToAgent(processedMessage, images.length > 0 ? images : undefined);
 				await this.processNonStreamingMessages(messages);
 			}
 		} catch (error: any) {
@@ -5838,7 +6339,7 @@ class LettaChatView extends ItemView {
 
 				try {
 					const messages =
-						await this.plugin.sendMessageToAgent(message, images.length > 0 ? images : undefined);
+						await this.plugin.sendMessageToAgent(processedMessage, images.length > 0 ? images : undefined);
 					await this.processNonStreamingMessages(messages);
 					return; // Success with fallback
 				} catch (fallbackError: any) {
