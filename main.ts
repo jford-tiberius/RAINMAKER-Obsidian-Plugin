@@ -114,6 +114,23 @@ interface RecentAgent {
 	lastUsed: number; // timestamp
 }
 
+// Message cache for fast conversation loading
+interface CachedMessage {
+	id: string;
+	created_at: number;  // Unix timestamp
+	message_type: string;
+	raw: any;  // Full message object for rendering
+}
+
+interface MessageCache {
+	agentId: string;
+	messages: CachedMessage[];
+	lastMessageId: string | null;      // Most recent message ID (for incremental sync)
+	oldestMessageId: string | null;    // Oldest loaded message ID (for pagination)
+	lastSyncTimestamp: number;         // When cache was last synced
+	hasMoreOlder: boolean;             // Whether more older messages exist
+}
+
 interface LettaPluginSettings {
 	lettaApiKey: string;
 	lettaBaseUrl: string;
@@ -138,6 +155,10 @@ interface LettaPluginSettings {
 	enableVaultTools: boolean; // Master toggle for vault collaboration tools
 	vaultToolsApprovedThisSession: boolean; // Session-based approval for write operations
 	blockedFolders: string[]; // Folders agents cannot access
+	// Message cache settings
+	messageCache: Record<string, MessageCache>;  // Keyed by agent ID
+	enableMessageCache: boolean;  // Enable/disable caching
+	cacheMaxMessages: number;  // Max messages to cache per agent
 	// Deprecated properties (kept for compatibility)
 	sourceName?: string;
 	autoSync?: boolean;
@@ -168,6 +189,10 @@ const DEFAULT_SETTINGS: LettaPluginSettings = {
 	enableVaultTools: true, // Enable vault collaboration tools
 	vaultToolsApprovedThisSession: false, // Require approval on first use
 	blockedFolders: [".obsidian", ".trash"], // Block system folders
+	// Message cache defaults
+	messageCache: {},  // Empty cache initially
+	enableMessageCache: true,  // Enable caching by default
+	cacheMaxMessages: 200,  // Cache up to 200 messages per agent
 };
 
 interface LettaAgent {
@@ -244,6 +269,222 @@ interface AgentConfig {
 	}>;
 }
 
+/**
+ * MessageCacheManager - Handles caching of conversation history for fast loading
+ * Uses Obsidian's persistent storage and incremental sync with Letta API
+ */
+class MessageCacheManager {
+	private plugin: any;  // LettaPlugin - using any to avoid circular reference
+
+	constructor(plugin: any) {
+		this.plugin = plugin;
+	}
+
+	// Get cache for specific agent
+	getCache(agentId: string): MessageCache | null {
+		return this.plugin.settings.messageCache?.[agentId] || null;
+	}
+
+	// Save cache to Obsidian's persistent storage
+	async saveCache(agentId: string, cache: MessageCache): Promise<void> {
+		if (!this.plugin.settings.messageCache) {
+			this.plugin.settings.messageCache = {};
+		}
+
+		// Trim cache if too large
+		const maxMessages = this.plugin.settings.cacheMaxMessages || 200;
+		if (cache.messages.length > maxMessages) {
+			// Keep most recent messages
+			cache.messages = cache.messages.slice(-maxMessages);
+			cache.oldestMessageId = cache.messages[0]?.id || null;
+			cache.hasMoreOlder = true;
+		}
+
+		this.plugin.settings.messageCache[agentId] = cache;
+		await this.plugin.saveSettings();
+	}
+
+	// Transform API message to cached format
+	private transformMessage(msg: any): CachedMessage {
+		return {
+			id: msg.id,
+			created_at: typeof msg.created_at === 'number'
+				? msg.created_at
+				: new Date(msg.date || msg.created_at || Date.now()).getTime() / 1000,
+			message_type: msg.message_type || msg.type,
+			raw: msg
+		};
+	}
+
+	// Fetch only NEW messages since last sync (incremental)
+	async fetchNewMessages(agentId: string): Promise<CachedMessage[]> {
+		const cache = this.getCache(agentId);
+		const newMessages: CachedMessage[] = [];
+
+		if (!cache?.lastMessageId) {
+			return newMessages;
+		}
+
+		try {
+			// Use 'after' parameter to get only messages newer than lastMessageId
+			const endpoint = `/v1/agents/${agentId}/messages?after=${cache.lastMessageId}&limit=100`;
+			const response = await this.plugin.makeRequest(endpoint);
+
+			if (response && Array.isArray(response) && response.length > 0) {
+				for (const msg of response) {
+					newMessages.push(this.transformMessage(msg));
+				}
+				console.log(`[Letta Cache] Fetched ${newMessages.length} new messages`);
+			}
+		} catch (error) {
+			console.error("[Letta Cache] Error fetching new messages:", error);
+		}
+
+		return newMessages;
+	}
+
+	// Full sync - initial load or when cache is empty
+	async fullSync(agentId: string, limit?: number): Promise<CachedMessage[]> {
+		const pageSize = limit || this.plugin.settings.historyPageSize || 50;
+
+		try {
+			const endpoint = `/v1/agents/${agentId}/messages?limit=${pageSize}`;
+			const response = await this.plugin.makeRequest(endpoint);
+
+			if (!response || !Array.isArray(response) || response.length === 0) {
+				console.log("[Letta Cache] No messages found for agent");
+				return [];
+			}
+
+			// Transform messages
+			const messages = response.map((msg: any) => this.transformMessage(msg));
+
+			// Sort by created_at ascending (oldest first)
+			messages.sort((a, b) => a.created_at - b.created_at);
+
+			// Create new cache
+			const cache: MessageCache = {
+				agentId,
+				messages,
+				lastMessageId: messages[messages.length - 1]?.id || null,
+				oldestMessageId: messages[0]?.id || null,
+				lastSyncTimestamp: Date.now(),
+				hasMoreOlder: response.length === pageSize
+			};
+
+			await this.saveCache(agentId, cache);
+			console.log(`[Letta Cache] Full sync complete: ${messages.length} messages cached`);
+
+			return messages;
+		} catch (error) {
+			console.error("[Letta Cache] Error during full sync:", error);
+			return [];
+		}
+	}
+
+	// Load older messages (pagination - for "Load More" button)
+	async loadOlderMessages(agentId: string, limit?: number): Promise<CachedMessage[]> {
+		const cache = this.getCache(agentId);
+		const pageSize = limit || this.plugin.settings.historyPageSize || 50;
+
+		if (!cache?.oldestMessageId || !cache.hasMoreOlder) {
+			console.log("[Letta Cache] No more older messages to load");
+			return [];
+		}
+
+		try {
+			const endpoint = `/v1/agents/${agentId}/messages?before=${cache.oldestMessageId}&limit=${pageSize}`;
+			const response = await this.plugin.makeRequest(endpoint);
+
+			if (!response || !Array.isArray(response) || response.length === 0) {
+				cache.hasMoreOlder = false;
+				await this.saveCache(agentId, cache);
+				return [];
+			}
+
+			const olderMessages = response.map((msg: any) => this.transformMessage(msg));
+
+			// Sort ascending
+			olderMessages.sort((a, b) => a.created_at - b.created_at);
+
+			// Prepend to cache
+			cache.messages = [...olderMessages, ...cache.messages];
+			cache.oldestMessageId = olderMessages[0]?.id || cache.oldestMessageId;
+			cache.hasMoreOlder = response.length === pageSize;
+
+			await this.saveCache(agentId, cache);
+			console.log(`[Letta Cache] Loaded ${olderMessages.length} older messages`);
+
+			return olderMessages;
+		} catch (error) {
+			console.error("[Letta Cache] Error loading older messages:", error);
+			return [];
+		}
+	}
+
+	// Smart load - uses cache when available, fetches only what's needed
+	async smartLoad(agentId: string, forceRefresh: boolean = false): Promise<CachedMessage[]> {
+		if (!this.plugin.settings.enableMessageCache) {
+			// Caching disabled - do full fetch
+			return this.fullSync(agentId);
+		}
+
+		const cache = this.getCache(agentId);
+
+		// No cache or force refresh - do full sync
+		if (!cache || forceRefresh || cache.messages.length === 0) {
+			console.log("[Letta Cache] Cache miss - performing full sync");
+			return this.fullSync(agentId);
+		}
+
+		// Cache exists - fetch only new messages
+		console.log(`[Letta Cache] Cache hit - ${cache.messages.length} messages, checking for new...`);
+		const newMessages = await this.fetchNewMessages(agentId);
+
+		if (newMessages.length > 0) {
+			// Sort new messages and append
+			newMessages.sort((a, b) => a.created_at - b.created_at);
+			cache.messages = [...cache.messages, ...newMessages];
+			cache.lastMessageId = newMessages[newMessages.length - 1].id;
+			cache.lastSyncTimestamp = Date.now();
+			await this.saveCache(agentId, cache);
+		}
+
+		return cache.messages;
+	}
+
+	// Add a sent/received message to cache
+	async addMessage(agentId: string, message: any): Promise<void> {
+		if (!this.plugin.settings.enableMessageCache) return;
+
+		const cache = this.getCache(agentId);
+		if (!cache) return;
+
+		const cachedMsg = this.transformMessage(message);
+		cache.messages.push(cachedMsg);
+		cache.lastMessageId = cachedMsg.id;
+		cache.lastSyncTimestamp = Date.now();
+
+		await this.saveCache(agentId, cache);
+	}
+
+	// Clear cache for specific agent
+	async clearCache(agentId: string): Promise<void> {
+		if (this.plugin.settings.messageCache?.[agentId]) {
+			delete this.plugin.settings.messageCache[agentId];
+			await this.plugin.saveSettings();
+			console.log(`[Letta Cache] Cleared cache for agent ${agentId}`);
+		}
+	}
+
+	// Clear all caches
+	async clearAllCaches(): Promise<void> {
+		this.plugin.settings.messageCache = {};
+		await this.plugin.saveSettings();
+		console.log("[Letta Cache] Cleared all message caches");
+	}
+}
+
 export default class LettaPlugin extends Plugin {
 	settings: LettaPluginSettings;
 	agent: LettaAgent | null = null;
@@ -258,9 +499,14 @@ export default class LettaPlugin extends Plugin {
 	private connectionPromise: Promise<boolean> | null = null;
 	// Track vault tools registration status
 	vaultToolsRegistered: boolean = false;
+	// Message cache manager for fast conversation loading
+	cacheManager: MessageCacheManager;
 
 	async onload() {
 		await this.loadSettings();
+
+		// Initialize cache manager
+		this.cacheManager = new MessageCacheManager(this);
 
 		// Patch global fetch to use Obsidian's requestUrl for Letta API calls (bypasses CORS)
 		this.patchGlobalFetch();
@@ -3255,7 +3501,7 @@ class LettaChatView extends ItemView {
 		await this.updateChatStatus();
 	}
 
-	async loadHistoricalMessages(options?: { loadMore?: boolean }) {
+	async loadHistoricalMessages(options?: { loadMore?: boolean; forceRefresh?: boolean }) {
 		// RAINMAKER FIX: Prevent concurrent message loads
 		if (this.isLoadingMessages) {
 			console.log("[Letta Plugin] Message load already in progress, skipping");
@@ -3268,9 +3514,10 @@ class LettaChatView extends ItemView {
 		}
 
 		const loadMore = options?.loadMore || false;
+		const forceRefresh = options?.forceRefresh || false;
 
-		// Check if we already have messages (don't reload on every status update, unless loading more)
-		if (!loadMore) {
+		// Check if we already have messages (don't reload on every status update, unless loading more or forcing refresh)
+		if (!loadMore && !forceRefresh) {
 			const existingMessages =
 				this.chatContainer.querySelectorAll(".letta-message");
 			if (existingMessages.length > 0) {
@@ -3282,74 +3529,77 @@ class LettaChatView extends ItemView {
 		this.isLoadingMessages = true;
 
 		try {
-			const limit = this.plugin.settings.historyPageSize || 50;
+			const agentId = this.plugin.agent.id;
+			const cacheManager = this.plugin.cacheManager;
 
-			// Build query - if loading more, we need to get messages before the oldest one we have
-			let endpoint = `/v1/agents/${this.plugin.agent?.id}/messages?limit=${limit}`;
-
-			// Get oldest message ID if loading more
 			if (loadMore) {
-				const oldestMessageId = this.getOldestMessageId();
-				if (oldestMessageId) {
-					endpoint += `&before=${oldestMessageId}`;
+				// Load older messages using cache manager
+				const olderMessages = await cacheManager.loadOlderMessages(agentId);
+
+				if (olderMessages.length > 0) {
+					// Extract raw messages and sort
+					const rawMessages = olderMessages.map(m => m.raw);
+					const sortedMessages = rawMessages.sort(
+						(a: any, b: any) =>
+							new Date(a.date).getTime() - new Date(b.date).getTime(),
+					);
+					await this.prependMessages(sortedMessages);
 				}
-			}
 
-			const messages = await this.plugin.makeRequest(endpoint);
+				// Check if more older messages exist
+				const cache = cacheManager.getCache(agentId);
+				if (cache?.hasMoreOlder) {
+					this.showLoadMoreButton();
+				} else {
+					this.removeLoadMoreButton();
+				}
+			} else {
+				// Initial load or refresh - use smart caching
+				const cachedMessages = await cacheManager.smartLoad(agentId, forceRefresh);
 
-			if (!messages || messages.length === 0) {
-				if (!loadMore) {
+				if (!cachedMessages || cachedMessages.length === 0) {
 					// Show welcome message for new conversations
 					await this.addMessage(
 						"assistant",
 						`Ready to chat with **${this.plugin.agent.name}**. How can I help you today?`,
 						"System",
 					);
+					return;
 				}
-				return;
-			}
 
-			// Filter out any obviously malformed messages before processing
-			const validMessages = messages.filter((msg: any) => {
-				if (!msg) return false;
-				const messageType = msg.message_type || msg.type;
-				if (!messageType) {
-					console.warn(
-						"[Letta Plugin] Message missing type field:",
-						msg,
-					);
-					return false;
+				// Filter out any obviously malformed messages before processing
+				const validMessages = cachedMessages.filter((msg: CachedMessage) => {
+					if (!msg || !msg.raw) return false;
+					const messageType = msg.message_type;
+					if (!messageType) {
+						console.warn(
+							"[Letta Plugin] Message missing type field:",
+							msg.raw,
+						);
+						return false;
+					}
+					return true;
+				});
+
+				if (validMessages.length === 0) {
+					return;
 				}
-				return true;
-			});
 
-			if (validMessages.length === 0) {
-				// No valid messages found in response
-				return;
-			}
+				// Extract raw messages (already sorted by cache manager)
+				const rawMessages = validMessages.map(m => m.raw);
 
-			// Sort messages by timestamp (oldest first)
-			const sortedMessages = validMessages.sort(
-				(a: any, b: any) =>
-					new Date(a.date).getTime() - new Date(b.date).getTime(),
-			);
-
-			if (loadMore) {
-				// Prepend older messages at top
-				await this.prependMessages(sortedMessages);
-			} else {
 				// Process messages normally (append)
-				await this.processMessagesInGroups(sortedMessages);
-			}
+				await this.processMessagesInGroups(rawMessages);
 
-			// Show "Load More" button if we got a full page
-			if (validMessages.length === limit) {
-				this.showLoadMoreButton();
-			} else {
-				// Remove load more button if we didn't get a full page
-				this.removeLoadMoreButton();
+				// Check if more older messages exist
+				const cache = cacheManager.getCache(agentId);
+				if (cache?.hasMoreOlder) {
+					this.showLoadMoreButton();
+				} else {
+					this.removeLoadMoreButton();
+				}
 			}
-		} catch (error) {
+		} catch (error: any) {
 			console.error(
 				"[Letta Plugin] Failed to load historical messages:",
 				error,
