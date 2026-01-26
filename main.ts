@@ -295,6 +295,8 @@ class FileProcessor {
 		switch (type) {
 			case 'text':
 				return await FileProcessor.extractTextFile(file);
+			case 'pdf':
+				return await FileProcessor.extractPdf(file);
 			case 'office-doc':
 				return await FileProcessor.extractDocx(file);
 			case 'office-sheet':
@@ -369,6 +371,39 @@ class FileProcessor {
 		} catch (error) {
 			console.error('[FileProcessor] Failed to extract XLSX:', error);
 			return `[Error extracting ${file.name}: ${error.message}]`;
+		}
+	}
+
+	/**
+	 * Extract text from PDF files using pdf.js
+	 */
+	static async extractPdf(file: File): Promise<string> {
+		try {
+			const pdfjsLib = await import('pdfjs-dist');
+
+			const arrayBuffer = await file.arrayBuffer();
+			const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+			const textParts: string[] = [];
+			for (let i = 1; i <= pdf.numPages; i++) {
+				const page = await pdf.getPage(i);
+				const textContent = await page.getTextContent();
+				const pageText = (textContent.items as any[])
+					.map(item => item.str)
+					.join(' ');
+				if (pageText.trim()) {
+					textParts.push(`[Page ${i}]\n${pageText}`);
+				}
+			}
+
+			if (textParts.length === 0) {
+				return `[PDF "${file.name}" appears to be image-based/scanned. No text could be extracted. Original saved to vault.]`;
+			}
+
+			return textParts.join('\n\n');
+		} catch (error: any) {
+			console.error('[FileProcessor] Failed to extract PDF:', error);
+			return `[Error extracting PDF "${file.name}": ${error.message}]`;
 		}
 	}
 
@@ -2037,6 +2072,27 @@ export default class LettaPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Get or create an upload folder for file attachments
+	 * Note: Letta folder upload is disabled for now - PDF text is extracted client-side
+	 */
+	async getOrCreateUploadFolder(): Promise<string | null> {
+		// Disabled for now - client-side extraction provides immediate access
+		// Letta folder upload can be re-enabled in a future version
+		console.log('[Letta] Folder upload disabled - using client-side extraction');
+		return null;
+	}
+
+	/**
+	 * Upload a file to Letta source/folder (async, fire-and-forget)
+	 * Note: Disabled for now - PDF text is extracted client-side for immediate access
+	 */
+	async uploadFileToFolder(file: File, folderId: string): Promise<boolean> {
+		// Disabled for now - client-side extraction provides immediate access
+		console.log(`[Letta] File upload to folder disabled - ${file.name} text extracted client-side`);
+		return false;
+	}
+
 	// Vault tool definitions
 	private getVaultToolDefinitions(): { name: string; code: string; description: string; tags: string[] }[] {
 		return [
@@ -3377,18 +3433,11 @@ class LettaChatView extends ItemView {
 				text: "...",
 			});
 
-			// Extract text in background
+			// Extract text in background (including PDFs now!)
 			try {
-				if (type !== 'pdf') {
-					attachment.extractedText = await FileProcessor.extractText(file, type);
-					processingEl.setText("✓");
-					processingEl.addClass("letta-file-ready");
-				} else {
-					// PDFs will be uploaded to Letta folder
-					processingEl.setText("📤");
-					processingEl.addClass("letta-file-upload");
-					processingEl.title = "Will be uploaded to Letta";
-				}
+				attachment.extractedText = await FileProcessor.extractText(file, type);
+				processingEl.setText("✓");
+				processingEl.addClass("letta-file-ready");
 			} catch (error) {
 				console.error('[Letta] Failed to process file:', error);
 				processingEl.setText("⚠");
@@ -3467,6 +3516,27 @@ class LettaChatView extends ItemView {
 	}
 
 	/**
+	 * Upload PDF to Letta folder in background for persistent archival_memory_search
+	 * This is fire-and-forget - errors are logged but don't block the user
+	 */
+	uploadPdfToLettaBackground(file: File): void {
+		// Run async but don't await - fire and forget
+		(async () => {
+			try {
+				const folderId = await this.plugin.getOrCreateUploadFolder();
+				if (folderId) {
+					const success = await this.plugin.uploadFileToFolder(file, folderId);
+					if (success) {
+						console.log(`[Letta] PDF "${file.name}" uploaded to Letta folder for archival search`);
+					}
+				}
+			} catch (error) {
+				console.error('[Letta] Background PDF upload failed (non-blocking):', error);
+			}
+		})();
+	}
+
+	/**
 	 * Build message content with attachments
 	 */
 	async buildMessageWithAttachments(text: string): Promise<{
@@ -3484,14 +3554,31 @@ class LettaChatView extends ItemView {
 					base64: attachment.base64,
 					mediaType: attachment.file.type,
 				});
-			} else if (attachment.type === 'pdf') {
-				// PDFs: save to vault and note for agent
+			} else if (attachment.type === 'pdf' && attachment.extractedText) {
+				// PDFs: use already-extracted text for IMMEDIATE agent access
 				const savedPath = await this.saveOriginalToVault(attachment.file);
-				if (savedPath) {
+
+				// Upload to Letta folder in background (fire-and-forget) for future archival_memory_search
+				this.uploadPdfToLettaBackground(attachment.file);
+
+				const textLength = attachment.extractedText.length;
+				if (textLength < 10000) {
+					// Small PDFs: include full text inline
 					attachmentNotes.push(
-						`[PDF "${attachment.file.name}" saved to vault at: ${savedPath}. ` +
-						`Use archival_memory_search or custom tools to access content.]`
+						`\n---\n**Attached PDF: ${attachment.file.name}**\n\`\`\`\n${attachment.extractedText}\n\`\`\``
 					);
+					if (savedPath) {
+						attachmentNotes.push(`(Original saved at: ${savedPath})`);
+					}
+				} else {
+					// Large PDFs: include excerpt
+					attachmentNotes.push(
+						`[PDF "${attachment.file.name}" is large (${FileProcessor.formatFileSize(textLength)}). ` +
+						`Content excerpt (first 2000 chars):\n\`\`\`\n${attachment.extractedText.substring(0, 2000)}...\n\`\`\`]`
+					);
+					if (savedPath) {
+						attachmentNotes.push(`(Full PDF saved at: ${savedPath})`);
+					}
 				}
 			} else if (attachment.extractedText) {
 				// Text/Office files with extracted content
