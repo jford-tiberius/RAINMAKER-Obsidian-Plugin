@@ -16,6 +16,9 @@ import {
 	Component,
 } from "obsidian";
 import { LettaClient, LettaError } from "@letta-ai/letta-client";
+import { LettaCodeBridge } from "./letta-code/bridge";
+import { LettaCodeMessage } from "./letta-code/types";
+import { BridgeToolRegistry } from "./letta-code/tools";
 
 // Store original fetch for non-Letta requests
 const originalFetch = window.fetch.bind(window);
@@ -137,6 +140,7 @@ interface LettaPluginSettings {
 	lettaProjectSlug: string;
 	agentId: string;
 	agentName: string; // Keep for display purposes, but use agentId for API calls
+	engineMode: 'cloud' | 'local'; // Cloud (Letta API) or Local (Letta Code)
 	autoConnect: boolean; // Control whether to auto-connect on startup
 	showReasoning: boolean; // Control whether reasoning messages are visible
 	enableStreaming: boolean; // Control whether to use streaming API responses
@@ -174,6 +178,7 @@ const DEFAULT_SETTINGS: LettaPluginSettings = {
 	lettaProjectSlug: "", // No default project - will be determined by agent selection
 	agentId: "",
 	agentName: "Obsidian Assistant",
+	engineMode: "cloud", // Default to cloud mode for compatibility
 	autoConnect: false, // Default to not auto-connecting to avoid startup blocking
 	showReasoning: true, // Default to showing reasoning messages in tool interactions
 	enableStreaming: true, // Default to enabling streaming for real-time responses
@@ -715,6 +720,9 @@ export default class LettaPlugin extends Plugin {
 	agent: LettaAgent | null = null;
 	statusBarItem: HTMLElement | null = null;
 	client: LettaClient | null = null;
+	bridge: LettaCodeBridge | null = null; // Letta Code integration (active bridge)
+	bridges: Map<string, LettaCodeBridge> = new Map(); // Map of agent ID -> bridge for multi-agent
+	bridgeTools: BridgeToolRegistry | null = null; // Tool registry for bridge mode
 	lastAuthError: string | null = null;
 	focusBlockId: string | null = null;
 	focusUpdateTimer: NodeJS.Timeout | null = null;
@@ -879,10 +887,19 @@ export default class LettaPlugin extends Plugin {
 
 	}
 
-	onunload() {
+	async onunload() {
 		if (this.focusUpdateTimer) {
 			clearTimeout(this.focusUpdateTimer);
 		}
+		
+		// Clean up all Letta Code bridges
+		for (const [agentId, bridge] of this.bridges.entries()) {
+			console.log(`[Letta Plugin] Stopping bridge for agent ${agentId}`);
+			await bridge.stop();
+		}
+		this.bridges.clear();
+		this.bridge = null;
+		
 		this.agent = null;
 
 		// Restore original fetch when plugin unloads
@@ -1298,11 +1315,18 @@ export default class LettaPlugin extends Plugin {
 		console.log(`[Letta Plugin] connectToLetta called - attempt ${attempt}/${maxAttempts}`);
 		console.log(`[Letta Plugin] Connection details:`, {
 			baseUrl: this.settings.lettaBaseUrl,
+			engineMode: this.settings.engineMode,
 			isCloudInstance,
 			hasApiKey: !!this.settings.lettaApiKey,
 			hasClient: !!this.client,
+			hasBridge: !!this.bridge,
 			currentAgent: this.agent
 		});
+
+		// Handle local mode (Letta Code)
+		if (this.settings.engineMode === 'local') {
+			return this._connectLocal(attempt, maxAttempts, progressCallback);
+		}
 
 		// Connection attempt ${attempt}/${maxAttempts} to ${this.settings.lettaBaseUrl}
 
@@ -1494,6 +1518,217 @@ export default class LettaPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Connect to Letta Code (local mode)
+	 */
+	private async _connectLocal(
+		attempt: number,
+		maxAttempts: number,
+		progressCallback?: (message: string) => void
+	): Promise<boolean> {
+		try {
+			const progressMessage = attempt === 1
+				? "Starting Letta Code..."
+				: `Retrying Letta Code startup... (${attempt}/${maxAttempts})`;
+			
+			this.updateStatusBar(progressMessage);
+			progressCallback?.(progressMessage);
+
+			const agentId = this.settings.agentId || 'default-agent';
+
+			// Check if bridge already exists for this agent
+			let existingBridge = this.bridges.get(agentId);
+			if (existingBridge && existingBridge.isConnected()) {
+				console.log(`[Letta Plugin] Reusing existing bridge for agent ${agentId}`);
+				this.bridge = existingBridge;
+				this.updateStatusBar('Connected (Local)');
+				this.isConnecting = false;
+				return true;
+			}
+
+			// Stop existing bridge if any
+			if (existingBridge) {
+				await existingBridge.stop();
+				this.bridges.delete(agentId);
+			}
+
+			// Create new bridge
+			this.bridge = new LettaCodeBridge({
+				workingDirectory: (this.app.vault.adapter as any).basePath || process.cwd(),
+				debug: true,
+				agentId: this.settings.agentId || undefined,
+			});
+
+			// Initialize tool registry
+			this.bridgeTools = new BridgeToolRegistry({
+				app: this.app,
+				plugin: this,
+			});
+
+			// Setup event handlers
+			this.bridge.on('message', async (message: LettaCodeMessage) => {
+				console.log('[Letta Plugin] Received message from Letta Code:', message);
+				
+				// Handle tool calls
+				if (message.message_type === 'function_call' && message.function_call) {
+					await this.handleBridgeToolCall(message.function_call);
+				}
+				
+				// Messages will be handled by the chat view via the callback
+			});
+
+			this.bridge.on('error', (error: Error) => {
+				console.error('[Letta Plugin] Letta Code error:', error);
+				new Notice(`Letta Code error: ${error.message}`);
+			});
+
+			this.bridge.on('ready', () => {
+				console.log('[Letta Plugin] Letta Code bridge ready');
+				new Notice('Connected to Letta Code');
+			});
+
+			this.bridge.on('closed', () => {
+				console.log('[Letta Plugin] Letta Code bridge closed');
+				this.updateStatusBar('Disconnected');
+			});
+
+			// Start the bridge
+			await this.bridge.start(this.settings.agentId);
+
+			// Store bridge in map
+			this.bridges.set(agentId, this.bridge);
+
+			// Update status
+			this.updateStatusBar('Connected (Local)');
+			this.isConnecting = false;
+
+			// Set a mock agent for UI compatibility
+			this.agent = {
+				id: this.settings.agentId || 'local-agent',
+				name: this.settings.agentName || 'Local Agent',
+				created_at: Date.now(),
+				llm_config: { model: 'local' },
+				embedding_config: { embedding_model: 'local' },
+			} as LettaAgent;
+
+			console.log('[Letta Plugin] Successfully connected to Letta Code');
+			return true;
+
+		} catch (error: any) {
+			console.error('[Letta Plugin] Failed to connect to Letta Code:', error);
+			
+			// Check if it's a "command not found" error
+			if (error.message?.includes('ENOENT') || error.message?.includes('not found')) {
+				new Notice(
+					'Letta Code not found. Please install it: npm install -g @letta-ai/letta-code',
+					10000
+				);
+				this.updateStatusBar('Letta Code not installed');
+				this.isConnecting = false;
+				return false;
+			}
+
+			// Retry logic
+			if (attempt < maxAttempts) {
+				const delay = 2000 * attempt;
+				console.log(`[Letta Plugin] Retrying in ${delay}ms...`);
+				await new Promise(resolve => setTimeout(resolve, delay));
+				return this._connectLocal(attempt + 1, maxAttempts, progressCallback);
+			}
+
+			new Notice(`Failed to start Letta Code: ${error.message}`);
+			this.updateStatusBar('Connection failed');
+			this.isConnecting = false;
+			return false;
+		}
+	}
+
+	/**
+	 * Handle tool call from Letta Code bridge
+	 */
+	private async handleBridgeToolCall(toolCall: { name: string; arguments: any }): Promise<void> {
+		if (!this.bridgeTools) {
+			console.error('[Letta Plugin] Tool registry not initialized');
+			return;
+		}
+
+		console.log('[Letta Plugin] Handling tool call:', toolCall.name, toolCall.arguments);
+
+		try {
+			// Execute the tool
+			const result = await this.bridgeTools.execute(toolCall.name, toolCall.arguments);
+
+			// Send result back to Letta Code via bridge
+			if (this.bridge && this.bridge.isConnected()) {
+				await this.bridge.sendToolReturn(
+					toolCall.name,
+					result.success ? 'success' : 'error',
+					result.success ? JSON.stringify(result.data) : (result.error || 'Unknown error')
+				);
+				console.log('[Letta Plugin] Tool result sent to bridge');
+			}
+
+		} catch (error: any) {
+			console.error('[Letta Plugin] Tool execution error:', error);
+			// Send error result back
+			if (this.bridge && this.bridge.isConnected()) {
+				await this.bridge.sendToolReturn(
+					toolCall.name,
+					'error',
+					error.message || 'Tool execution failed'
+				);
+			}
+		}
+	}
+
+	/**
+	 * Switch to a different agent (local mode multi-agent support)
+	 */
+	async switchToAgent(agentId: string): Promise<boolean> {
+		if (this.settings.engineMode !== 'local') {
+			console.log('[Letta Plugin] Agent switching only available in local mode');
+			return false;
+		}
+
+		// Check if bridge exists
+		const existingBridge = this.bridges.get(agentId);
+		if (existingBridge && existingBridge.isConnected()) {
+			// Switch to existing bridge
+			this.bridge = existingBridge;
+			this.settings.agentId = agentId;
+			await this.saveSettings();
+			
+			this.agent = {
+				id: agentId,
+				name: `Agent ${agentId}`,
+				created_at: Date.now(),
+				llm_config: { model: 'local' },
+				embedding_config: { embedding_model: 'local' },
+			} as LettaAgent;
+			
+			console.log(`[Letta Plugin] Switched to agent ${agentId}`);
+			this.updateStatusBar(`Connected (Agent ${agentId})`);
+			return true;
+		} else {
+			// Connect to new agent
+			this.settings.agentId = agentId;
+			await this.saveSettings();
+			return await this.connectToLetta(1);
+		}
+	}
+
+	/**
+	 * Get list of active bridge connections
+	 */
+	getActiveBridges(): string[] {
+		const active: string[] = [];
+		for (const [agentId, bridge] of this.bridges.entries()) {
+			if (bridge.isConnected()) {
+				active.push(agentId);
+			}
+		}
+		return active;
+	}
 
 	async setupAgent(): Promise<void> {
 
@@ -1952,6 +2187,12 @@ export default class LettaPlugin extends Plugin {
 		abortSignal?: AbortSignal,
 	): Promise<void> {
 		if (!this.agent) throw new Error("Agent not connected");
+		
+		// Route to bridge if in local mode
+		if (this.settings.engineMode === 'local' && this.bridge) {
+			return this.sendMessageToBridge(message, images, onMessage, onError, onComplete, abortSignal);
+		}
+		
 		if (!this.client) throw new Error("Client not initialized");
 
 		// Check if already aborted before starting
@@ -2057,6 +2298,67 @@ export default class LettaPlugin extends Plugin {
 		}
 
 		return false;
+	}
+
+	/**
+	 * Send message through Letta Code bridge (local mode)
+	 */
+	private async sendMessageToBridge(
+		message: string,
+		images: Array<{ base64: string; mediaType: string }> | undefined,
+		onMessage: (message: any) => void,
+		onError: (error: Error) => void,
+		onComplete: () => void,
+		abortSignal?: AbortSignal,
+	): Promise<void> {
+		if (!this.bridge || !this.bridge.isConnected()) {
+			onError(new Error("Bridge not connected"));
+			return;
+		}
+
+		console.log('[Letta Plugin] Sending message via bridge:', message.substring(0, 100));
+
+		let hasCompleted = false;
+		const completeOnce = () => {
+			if (!hasCompleted) {
+				hasCompleted = true;
+				onComplete();
+			}
+		};
+
+		try {
+			// Send message to bridge with callback for streaming responses
+			await this.bridge.sendMessage(message, images, (lettaMessage: LettaCodeMessage) => {
+				console.log('[Letta Plugin] Bridge message received:', lettaMessage);
+				
+				// Forward to chat view
+				onMessage(lettaMessage);
+				
+				// Check if this is a completion message
+				if (lettaMessage.message_type === 'assistant_message' || 
+					lettaMessage.content === '[DONE]') {
+					completeOnce();
+				}
+			});
+
+			// Set a timeout in case we don't get a completion signal
+			setTimeout(() => {
+				completeOnce();
+			}, 30000); // 30 second timeout
+
+			// Handle abort signal
+			if (abortSignal) {
+				abortSignal.addEventListener('abort', () => {
+					console.log('[Letta Plugin] Bridge message aborted');
+					completeOnce();
+				});
+			}
+
+		} catch (error: any) {
+			console.error('[Letta Plugin] Bridge message error:', error);
+			onError(error);
+			completeOnce();
+		}
 	}
 
 	/**
@@ -13471,6 +13773,23 @@ class LettaSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		containerEl.createEl("h2", { text: "Letta AI Agent Settings" });
+
+		// Engine Mode Selection
+		new Setting(containerEl)
+			.setName("Engine Mode")
+			.setDesc("Choose between Letta Cloud (remote API) or Letta Code (local CLI)")
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption("cloud", "Letta Cloud (Remote API)")
+					.addOption("local", "Letta Code (Local CLI)")
+					.setValue(this.plugin.settings.engineMode)
+					.onChange(async (value: 'cloud' | 'local') => {
+						this.plugin.settings.engineMode = value;
+						await this.plugin.saveSettings();
+						new Notice(`Engine mode set to: ${value === 'cloud' ? 'Cloud' : 'Local'}`);
+						// Note: User needs to reconnect for this to take effect
+					}),
+			);
 
 		// API Configuration
 		containerEl.createEl("h3", { text: "API Configuration" });

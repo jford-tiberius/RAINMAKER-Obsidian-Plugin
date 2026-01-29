@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Write(**)",
+      "Bash(C:\\Python313\\python.exe check_agent_tools.py)",
+      "Bash(Get-ChildItem -Directory -Depth 0 | Select-Object -ExpandProperty Name)",
+      "Bash(dir /B /A:D)",
+      "Bash(dir main.ts)",
+      "Bash(dir /B esbuild.config.mjs version-bump.mjs 2>nul)",
+      "Bash(dir /B LICENSE* 2>nul)",
+      "Bash(move \"C:\\Users\\james\\.letta\\plans\\nimble-humble-jasper.md\" \"C:\\Users\\james\\.letta\\plans\\2026-01-29-letta-code-integration.md\")",
+      "Bash(cd C:\\Users\\james\\.letta\\plans && ren nimble-humble-jasper.md 2026-01-29-letta-code-integration.md)",
+      "Bash(npm run dev:*)",
+      "Bash(timeout /t 5 /nobreak > nul 2>&1 || exit 0)",
+      "Bash(npm run build:*)",
+      "Bash(git add:*)",
+      "Bash(where git)",
+      "Bash(dir \"C:\\Program Files\\Git\\cmd\\git.exe\")",
+      "Bash(powershell -Command \"Get-Command git -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source\")",
+      "Bash(cd C:\\Users\\james\\000_dev\\000_PROJECT_RAINMAKER\\RAINMAKER-Obsidian-Plugin && commit-and-sync.bat)",
+      "Bash(cd C:\\Users\\james\\000_dev\\000_PROJECT_RAINMAKER\\RAINMAKER-Obsidian-Plugin && \"C:\\Program Files\\Git\\bin\\git.exe\" --version)",
+      "Bash(cd C:\\Users\\james && dir /s /b git.exe 2>nul | findstr /i \"git.exe\" | findstr /v \".git\")",
+      "Bash(git status:*)",
+      "Bash(dir \"C:\\Program Files\\Git\\cmd\\git.exe\" /b)",
+      "Bash(cd C:\\Users\\james\\000_dev\\000_PROJECT_RAINMAKER\\RAINMAKER-Obsidian-Plugin && call commit-and-sync.bat)",
+      "Bash(cd C:\\Users\\james\\000_dev\\000_PROJECT_RAINMAKER\\RAINMAKER-Obsidian-Plugin && gh --version)",
+      "Bash(dir \"C:\\Program Files\\Git\\cmd\" /b)",
+      "Bash(dir \"C:\\Program Files\\nodejs\" /b)",
+      "Bash(cd \"C:\\Program Files\\Git\\cmd\" && dir git.exe)",
+      "Bash(cd \"C:\\Program Files\\nodejs\" && dir node.exe)",
+      "Bash(dir C:\\Progra~1\\Git\\cmd)",
+      "Bash(dir C:\\Progra~1\\nodejs)",
+      "Bash(setx PATH \"%PATH%;C:\\Progra~1\\Git\\cmd;C:\\Progra~1\\nodejs\")",
+      "Bash(echo:*)",
+      "Bash(set PATH=%PATH%;C:\\Progra~1\\Git\\cmd;C:\\Progra~1\\nodejs && git --version)",
+      "Bash(npm --version:*)",
+      "Bash(C:\\Progra~1\\nodejs\\npm.cmd --version)"
+    ]
+  }
+}
