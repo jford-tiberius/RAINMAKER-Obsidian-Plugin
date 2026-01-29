@@ -1607,9 +1607,19 @@ export default class LettaPlugin extends Plugin {
 				id: this.settings.agentId || 'local-agent',
 				name: this.settings.agentName || 'Local Agent',
 				created_at: Date.now(),
-				llm_config: { model: 'local' },
-				embedding_config: { embedding_model: 'local' },
-			} as LettaAgent;
+				llm_config: { 
+					model: 'local',
+					model_endpoint_type: 'local',
+					provider_name: 'local',
+					provider_category: 'base' as const
+				},
+				embedding_config: { 
+					embedding_model: 'local',
+					embedding_endpoint_type: 'local',
+					provider_name: 'local',
+					provider_category: 'base' as const
+				},
+			} as any;
 
 			console.log('[Letta Plugin] Successfully connected to Letta Code');
 			return true;
@@ -1702,9 +1712,19 @@ export default class LettaPlugin extends Plugin {
 				id: agentId,
 				name: `Agent ${agentId}`,
 				created_at: Date.now(),
-				llm_config: { model: 'local' },
-				embedding_config: { embedding_model: 'local' },
-			} as LettaAgent;
+				llm_config: { 
+					model: 'local',
+					model_endpoint_type: 'local',
+					provider_name: 'local',
+					provider_category: 'base' as const
+				},
+				embedding_config: { 
+					embedding_model: 'local',
+					embedding_endpoint_type: 'local',
+					provider_name: 'local',
+					provider_category: 'base' as const
+				},
+			} as any;
 			
 			console.log(`[Letta Plugin] Switched to agent ${agentId}`);
 			this.updateStatusBar(`Connected (Agent ${agentId})`);
