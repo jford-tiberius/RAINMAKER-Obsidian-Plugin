@@ -4,6 +4,8 @@
 
 import { spawn, ChildProcess } from 'child_process';
 import { BridgeMessage, LettaCodeConfig, LettaCodeMessage, BridgeEvents } from './types';
+import * as path from 'path';
+import * as fs from 'fs';
 
 export class LettaCodeBridge {
 	private process: ChildProcess | null = null;
@@ -17,10 +19,43 @@ export class LettaCodeBridge {
 
 	constructor(config: LettaCodeConfig) {
 		this.config = {
-			lettaCodePath: 'letta',
+			lettaCodePath: this.findLettaPath(),
 			debug: false,
 			...config,
 		};
+	}
+
+	/**
+	 * Find the letta executable in common locations
+	 */
+	private findLettaPath(): string {
+		// Common locations for letta on Windows
+		const homeDir = process.env.USERPROFILE || process.env.HOME || '';
+		const possiblePaths = [
+			// npm global install locations
+			path.join(homeDir, 'AppData', 'Roaming', 'npm', 'letta.cmd'),
+			path.join(homeDir, 'AppData', 'Roaming', 'npm', 'letta'),
+			// Linux/Mac npm global
+			'/usr/local/bin/letta',
+			'/usr/bin/letta',
+			path.join(homeDir, '.npm-global', 'bin', 'letta'),
+			// Default fallback (might work if in PATH)
+			'letta',
+		];
+
+		for (const p of possiblePaths) {
+			try {
+				if (fs.existsSync(p)) {
+					console.log('[LettaCodeBridge] Found letta at:', p);
+					return p;
+				}
+			} catch {
+				// Ignore errors, try next path
+			}
+		}
+
+		console.log('[LettaCodeBridge] Could not find letta, using default "letta"');
+		return 'letta';
 	}
 
 	/**
@@ -48,9 +83,12 @@ export class LettaCodeBridge {
 		return new Promise((resolve, reject) => {
 			try {
 				// Spawn the Letta Code process
+				// Use shell: true on Windows to execute .cmd files properly
+				const isWindows = process.platform === 'win32';
 				this.process = spawn(this.config.lettaCodePath!, args, {
 					cwd: this.config.workingDirectory,
 					stdio: ['pipe', 'pipe', 'pipe'],
+					shell: isWindows,
 				});
 
 				// Setup stdout handler for responses
