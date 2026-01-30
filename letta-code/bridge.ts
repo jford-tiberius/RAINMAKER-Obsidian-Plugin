@@ -108,8 +108,8 @@ export class LettaCodeBridge {
 		}
 
 		const lettaArgs = [
-			'--headless', // Non-interactive mode
-			'--output', 'json', // JSON output format
+			'--input-format', 'stream-json',  // Bidirectional JSON communication via stdin
+			'--output-format', 'stream-json', // JSON output format
 		];
 
 		// Add agent ID if provided
