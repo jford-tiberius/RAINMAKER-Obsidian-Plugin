@@ -19,43 +19,84 @@ export class LettaCodeBridge {
 
 	constructor(config: LettaCodeConfig) {
 		this.config = {
-			lettaCodePath: this.findLettaPath(),
+			lettaCodePath: config.lettaCodePath || 'letta',
 			debug: false,
 			...config,
 		};
 	}
 
 	/**
-	 * Find the letta executable in common locations
+	 * Find Node.js executable in common locations (GUI apps like Obsidian have minimal PATH)
 	 */
-	private findLettaPath(): string {
-		// Common locations for letta on Windows
+	private findNodePath(): string | null {
+		const isWindows = process.platform === 'win32';
+		const nodeExe = isWindows ? 'node.exe' : 'node';
 		const homeDir = process.env.USERPROFILE || process.env.HOME || '';
-		const possiblePaths = [
-			// npm global install locations
-			path.join(homeDir, 'AppData', 'Roaming', 'npm', 'letta.cmd'),
-			path.join(homeDir, 'AppData', 'Roaming', 'npm', 'letta'),
-			// Linux/Mac npm global
-			'/usr/local/bin/letta',
-			'/usr/bin/letta',
-			path.join(homeDir, '.npm-global', 'bin', 'letta'),
-			// Default fallback (might work if in PATH)
-			'letta',
+		const appData = process.env.APPDATA || '';
+		const localAppData = process.env.LOCALAPPDATA || '';
+		const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
+
+		const searchPaths = isWindows ? [
+			// npm global (most common for letta users)
+			path.join(appData, 'npm'),
+			// Official Node.js installer
+			path.join(programFiles, 'nodejs'),
+			path.join(localAppData, 'Programs', 'nodejs'),
+			// nvm-windows
+			process.env.NVM_SYMLINK,
+			// volta
+			path.join(homeDir, '.volta', 'bin'),
+			// fnm
+			process.env.FNM_MULTISHELL_PATH,
+		].filter(Boolean) as string[] : [
+			'/usr/local/bin',
+			'/usr/bin',
+			'/opt/homebrew/bin',
+			path.join(homeDir, '.volta', 'bin'),
+			path.join(homeDir, '.nvm', 'current', 'bin'),
 		];
 
-		for (const p of possiblePaths) {
+		for (const dir of searchPaths) {
+			try {
+				const nodePath = path.join(dir, nodeExe);
+				if (fs.existsSync(nodePath)) {
+					console.log('[LettaCodeBridge] Found node at:', nodePath);
+					return nodePath;
+				}
+			} catch {
+				// Ignore
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Find the letta.js entry point (not .cmd wrapper)
+	 */
+	private findLettaJs(): string | null {
+		const homeDir = process.env.USERPROFILE || process.env.HOME || '';
+		const appData = process.env.APPDATA || '';
+		
+		const searchPaths = [
+			// npm global install - the actual JS file
+			path.join(appData, 'npm', 'node_modules', '@letta-ai', 'letta-code', 'letta.js'),
+			path.join(homeDir, '.npm-global', 'lib', 'node_modules', '@letta-ai', 'letta-code', 'letta.js'),
+			// Linux/Mac
+			'/usr/local/lib/node_modules/@letta-ai/letta-code/letta.js',
+			'/usr/lib/node_modules/@letta-ai/letta-code/letta.js',
+		];
+
+		for (const p of searchPaths) {
 			try {
 				if (fs.existsSync(p)) {
-					console.log('[LettaCodeBridge] Found letta at:', p);
+					console.log('[LettaCodeBridge] Found letta.js at:', p);
 					return p;
 				}
 			} catch {
-				// Ignore errors, try next path
+				// Ignore
 			}
 		}
-
-		console.log('[LettaCodeBridge] Could not find letta, using default "letta"');
-		return 'letta';
+		return null;
 	}
 
 	/**
@@ -66,29 +107,60 @@ export class LettaCodeBridge {
 			throw new Error('Letta Code bridge already started');
 		}
 
-		const args = [
+		const lettaArgs = [
 			'--headless', // Non-interactive mode
 			'--output', 'json', // JSON output format
 		];
 
 		// Add agent ID if provided
 		if (agentId || this.config.agentId) {
-			args.push('--agent', agentId || this.config.agentId!);
+			lettaArgs.push('--agent', agentId || this.config.agentId!);
+		}
+
+		// Determine how to spawn letta
+		// On Windows, we need to use node + letta.js directly (not .cmd wrapper)
+		// because GUI apps like Obsidian don't have proper PATH
+		const isWindows = process.platform === 'win32';
+		let command: string;
+		let args: string[];
+
+		if (isWindows) {
+			const nodePath = this.findNodePath();
+			const lettaJs = this.findLettaJs();
+			
+			if (nodePath && lettaJs) {
+				// Best approach: run node with letta.js directly
+				command = nodePath;
+				args = [lettaJs, ...lettaArgs];
+				console.log('[LettaCodeBridge] Using node + letta.js:', command, lettaJs);
+			} else if (this.config.lettaCodePath && this.config.lettaCodePath !== 'letta') {
+				// User provided custom path
+				command = this.config.lettaCodePath;
+				args = lettaArgs;
+				console.log('[LettaCodeBridge] Using custom path:', command);
+			} else {
+				// Fallback - try letta directly (may fail)
+				command = 'letta';
+				args = lettaArgs;
+				console.log('[LettaCodeBridge] Fallback to letta command');
+			}
+		} else {
+			// Unix - letta should work directly
+			command = this.config.lettaCodePath || 'letta';
+			args = lettaArgs;
 		}
 
 		if (this.config.debug) {
-			console.log('[LettaCodeBridge] Starting Letta Code:', this.config.lettaCodePath, args);
+			console.log('[LettaCodeBridge] Starting Letta Code:', command, args);
 		}
 
 		return new Promise((resolve, reject) => {
 			try {
 				// Spawn the Letta Code process
-				// Use shell: true on Windows to execute .cmd files properly
-				const isWindows = process.platform === 'win32';
-				this.process = spawn(this.config.lettaCodePath!, args, {
+				this.process = spawn(command, args, {
 					cwd: this.config.workingDirectory,
 					stdio: ['pipe', 'pipe', 'pipe'],
-					shell: isWindows,
+					windowsHide: true,
 				});
 
 				// Setup stdout handler for responses
