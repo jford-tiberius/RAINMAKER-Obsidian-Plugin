@@ -149,8 +149,9 @@ export default class LettaPlugin extends Plugin {
 				clientOptions.project = this.settings.lettaProjectSlug;
 			}
 			
-			// Store custom fetch for raw requests
+			// Store and use custom fetch for all requests (CORS bypass)
 			this.customFetch = createObsidianFetch(this.settings.lettaBaseUrl);
+			clientOptions.fetcher = this.customFetch as any;
 			
 			this.client = new LettaClient(clientOptions);
 
