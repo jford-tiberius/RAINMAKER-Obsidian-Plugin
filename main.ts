@@ -173,9 +173,17 @@ export default class LettaPlugin extends Plugin {
 
 		try {
 			console.log("[Letta] Loading agents from:", this.settings.lettaBaseUrl);
-			const agents = await this.client.agents.list();
-			console.log("[Letta] Agents response:", agents);
-			this.agents = Array.isArray(agents) ? agents : [];
+			const response: any = await this.client.agents.list();
+			console.log("[Letta] Agents response:", response);
+			
+			// Handle both response formats: {agents: [...]} or [...]
+			if (Array.isArray(response)) {
+				this.agents = response;
+			} else if (response && Array.isArray(response.agents)) {
+				this.agents = response.agents;
+			} else {
+				this.agents = [];
+			}
 
 			// Set current agent
 			if (this.settings.agentId) {
@@ -220,8 +228,9 @@ export default class LettaPlugin extends Plugin {
 			let folderId = "";
 			
 			// Try to find existing "uploads" folder
-			const folders = await this.client.agents.folders.list(this.currentAgent.id);
-			const uploadFolder = Array.isArray(folders) ? folders.find((f: any) => f.name === "uploads") : null;
+			const foldersResponse: any = await this.client.agents.folders.list(this.currentAgent.id);
+			const folders = Array.isArray(foldersResponse) ? foldersResponse : (foldersResponse.folders || []);
+			const uploadFolder = folders.find((f: any) => f.name === "uploads");
 			
 			if (uploadFolder && uploadFolder.id) {
 				folderId = uploadFolder.id;
@@ -382,12 +391,20 @@ class LettaChatView extends ItemView {
 		}
 
 		try {
-			const messages = await this.plugin.client.agents.messages.list(
+			const response: any = await this.plugin.client.agents.messages.list(
 				this.plugin.currentAgent.id,
 				{ limit: 50 }
 			);
 			
-			this.messages = Array.isArray(messages) ? messages : [];
+			// Handle both response formats
+			if (Array.isArray(response)) {
+				this.messages = response;
+			} else if (response && Array.isArray(response.messages)) {
+				this.messages = response.messages;
+			} else {
+				this.messages = [];
+			}
+			
 			this.renderMessages();
 		} catch (error) {
 			console.error("[Letta] Failed to load messages:", error);
