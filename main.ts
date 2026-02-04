@@ -73,6 +73,7 @@ export default class LettaPlugin extends Plugin {
 	client: LettaClient | null = null;
 	agents: any[] = [];
 	currentAgent: any = null;
+	customFetch: typeof fetch | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -148,8 +149,8 @@ export default class LettaPlugin extends Plugin {
 				clientOptions.project = this.settings.lettaProjectSlug;
 			}
 			
-			// CORS bypass for Obsidian
-			clientOptions.fetcher = createObsidianFetch(this.settings.lettaBaseUrl);
+			// Store custom fetch for raw requests
+			this.customFetch = createObsidianFetch(this.settings.lettaBaseUrl);
 			
 			this.client = new LettaClient(clientOptions);
 
@@ -169,18 +170,41 @@ export default class LettaPlugin extends Plugin {
 	}
 
 	async loadAgents() {
-		if (!this.client) return;
+		if (!this.customFetch) return;
 
 		try {
 			console.log("[Letta] Loading agents from:", this.settings.lettaBaseUrl);
-			const response: any = await this.client.agents.list();
-			console.log("[Letta] Agents response:", response);
+			
+			// Make raw request to bypass SDK validation
+			const headers: Record<string, string> = {
+				'Content-Type': 'application/json',
+			};
+			
+			if (this.settings.lettaApiKey) {
+				headers['Authorization'] = `Bearer ${this.settings.lettaApiKey}`;
+			}
+			
+			if (this.settings.lettaProjectSlug) {
+				headers['X-Project'] = this.settings.lettaProjectSlug;
+			}
+			
+			const response = await this.customFetch(`${this.settings.lettaBaseUrl}/v1/agents/`, {
+				method: 'GET',
+				headers,
+			});
+			
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+			}
+			
+			const data = await response.json();
+			console.log("[Letta] Agents response:", data);
 			
 			// Handle both response formats: {agents: [...]} or [...]
-			if (Array.isArray(response)) {
-				this.agents = response;
-			} else if (response && Array.isArray(response.agents)) {
-				this.agents = response.agents;
+			if (Array.isArray(data)) {
+				this.agents = data;
+			} else if (data && Array.isArray(data.agents)) {
+				this.agents = data.agents;
 			} else {
 				this.agents = [];
 			}
