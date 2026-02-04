@@ -12,21 +12,23 @@ import { LettaClient } from "@letta-ai/letta-client";
 
 // CORS bypass for Letta API
 const originalFetch = window.fetch.bind(window);
-function createObsidianFetch(lettaBaseUrl: string): typeof fetch {
-	return async function obsidianFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-		const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+function createObsidianFetch(lettaBaseUrl: string): any {
+	return async function obsidianFetch(args: any): Promise<Response> {
+		// Handle both old (url, init) and new (args object) signatures
+		const url = typeof args === 'string' ? args : args.url;
+		const init = typeof args === 'string' ? arguments[1] : args;
 		
 		if (!url.includes('letta.com') && !url.startsWith(lettaBaseUrl)) {
-			return originalFetch(input, init);
+			return originalFetch(url, init);
 		}
 
 		try {
 			const headers: Record<string, string> = {};
 			if (init?.headers) {
 				if (init.headers instanceof Headers) {
-					init.headers.forEach((value, key) => { headers[key] = value; });
+					init.headers.forEach((value: string, key: string) => { headers[key] = value; });
 				} else if (Array.isArray(init.headers)) {
-					init.headers.forEach(([key, value]) => { headers[key] = value; });
+					init.headers.forEach(([key, value]: [string, string]) => { headers[key] = value; });
 				} else {
 					Object.assign(headers, init.headers);
 				}
@@ -154,6 +156,9 @@ export default class LettaPlugin extends Plugin {
 			clientOptions.fetcher = this.customFetch as any;
 			
 			this.client = new LettaClient(clientOptions);
+			
+			// Override global fetch for SDK streaming
+			(window as any).fetch = this.customFetch;
 
 			// Test connection by loading agents
 			new Notice("Connecting to Letta...");
