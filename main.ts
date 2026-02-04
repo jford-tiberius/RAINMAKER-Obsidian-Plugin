@@ -130,27 +130,41 @@ export default class LettaPlugin extends Plugin {
 
 	async connectToLetta() {
 		try {
-			if (!this.settings.lettaApiKey) {
-				new Notice("Letta API key not configured");
+			if (!this.settings.lettaBaseUrl) {
+				new Notice("Letta base URL not configured");
 				return;
 			}
 
-			// Setup CORS bypass
-			const customFetch = createObsidianFetch(this.settings.lettaBaseUrl);
-			
-			this.client = new LettaClient({
-				token: this.settings.lettaApiKey,
+			// For self-hosted, token might be optional
+			const clientOptions: any = {
 				baseUrl: this.settings.lettaBaseUrl,
-				project: this.settings.lettaProjectSlug,
-			});
+			};
+			
+			if (this.settings.lettaApiKey) {
+				clientOptions.token = this.settings.lettaApiKey;
+			}
+			
+			if (this.settings.lettaProjectSlug) {
+				clientOptions.project = this.settings.lettaProjectSlug;
+			}
+			
+			// CORS bypass for Obsidian
+			clientOptions.fetcher = createObsidianFetch(this.settings.lettaBaseUrl);
+			
+			this.client = new LettaClient(clientOptions);
 
-			// Load agents
+			// Test connection by loading agents
+			new Notice("Connecting to Letta...");
 			await this.loadAgents();
 
-			new Notice("Connected to Letta");
-		} catch (error) {
+			if (this.agents.length > 0) {
+				new Notice(`Connected! Found ${this.agents.length} agent(s)`);
+			} else {
+				new Notice("Connected, but no agents found");
+			}
+		} catch (error: any) {
 			console.error("[Letta] Connection error:", error);
-			new Notice("Failed to connect to Letta");
+			new Notice(`Failed to connect: ${error.message || error}`);
 		}
 	}
 
@@ -158,7 +172,9 @@ export default class LettaPlugin extends Plugin {
 		if (!this.client) return;
 
 		try {
+			console.log("[Letta] Loading agents from:", this.settings.lettaBaseUrl);
 			const agents = await this.client.agents.list();
+			console.log("[Letta] Agents response:", agents);
 			this.agents = Array.isArray(agents) ? agents : [];
 
 			// Set current agent
@@ -170,8 +186,15 @@ export default class LettaPlugin extends Plugin {
 				this.settings.agentId = this.currentAgent.id;
 				await this.saveSettings();
 			}
-		} catch (error) {
+			
+			// Update chat view if open
+			const leaves = this.app.workspace.getLeavesOfType(LETTA_CHAT_VIEW_TYPE);
+			if (leaves.length > 0 && leaves[0].view instanceof LettaChatView) {
+				leaves[0].view.updateAgentDropdown();
+			}
+		} catch (error: any) {
 			console.error("[Letta] Failed to load agents:", error);
+			throw error;
 		}
 	}
 
