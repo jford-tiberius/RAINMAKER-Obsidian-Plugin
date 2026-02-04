@@ -1,11 +1,10 @@
 {
 	"id": "rainmaker-obsidian",
 	"name": "Rainmaker Obsidian",
-	"version": "2.0.3",
+	"version": "3.0.0",
 	"minAppVersion": "0.15.0",
-	"description": "Chat with stateful AI agents powered by Letta. Supports Cloud and Local (Letta Code) modes. 14 vault tools, multi-agent support, conversation history, and full vault collaboration. Part of PROJECT RAINMAKER.",
+	"description": "Clean chat interface for Letta AI agents. Switch agents, upload files, pure messaging - no clutter.",
 	"author": "PROJECT RAINMAKER",
 	"authorUrl": "https://github.com/jford-tiberius/RAINMAKER-Obsidian-Plugin",
-	"isDesktopOnly": true,
-	"fundingUrl": "https://github.com/jford-tiberius/RAINMAKER-Obsidian-Plugin"
+	"isDesktopOnly": true
 }
