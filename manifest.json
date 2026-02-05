@@ -1,7 +1,7 @@
 {
 	"id": "rainmaker-obsidian",
 	"name": "Rainmaker Obsidian",
-	"version": "3.0.8",
+	"version": "3.0.9",
 	"minAppVersion": "0.15.0",
 	"description": "Clean chat interface for Letta AI agents. Switch agents, upload files, pure messaging - no clutter.",
 	"author": "PROJECT RAINMAKER",

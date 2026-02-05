@@ -577,7 +577,7 @@ class LettaChatView extends ItemView {
 
 							try {
 								const parsed = JSON.parse(data);
-								if (parsed.role === "assistant" && Array.isArray(parsed.content)) {
+								const isAssistant = parsed.role === "assistant" || parsed.message_type === "assistant_message"; if (isAssistant && Array.isArray(parsed.content)) {
 									for (const contentPart of parsed.content) {
 										if (contentPart.type === "text" && contentPart.text) {
 											fullText += contentPart.text;
@@ -669,3 +669,4 @@ class LettaSettingTab extends PluginSettingTab {
 			);
 	}
 }
+
