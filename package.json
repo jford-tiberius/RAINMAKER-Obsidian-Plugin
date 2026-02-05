@@ -1,6 +1,6 @@
 {
 	"name": "rainmaker-obsidian",
-	"version": "3.0.5",
+	"version": "3.0.6",
 	"description": "Clean Letta chat interface for Obsidian",
 	"main": "main.js",
 	"scripts": {

@@ -151,14 +151,12 @@ export default class LettaPlugin extends Plugin {
 				clientOptions.project = this.settings.lettaProjectSlug;
 			}
 			
-			// Store and use custom fetch for all requests (CORS bypass)
+			// Override global fetch BEFORE creating client (SDK captures it at init)
 			this.customFetch = createObsidianFetch(this.settings.lettaBaseUrl);
+			(window as any).fetch = this.customFetch;
 			clientOptions.fetcher = this.customFetch as any;
 			
 			this.client = new LettaClient(clientOptions);
-			
-			// Override global fetch for SDK streaming
-			(window as any).fetch = this.customFetch;
 
 			// Test connection by loading agents
 			new Notice("Connecting to Letta...");
@@ -421,10 +419,13 @@ class LettaChatView extends ItemView {
 		}
 
 		try {
+			console.log("[Letta] Loading messages for agent:", this.plugin.currentAgent.id);
 			const response: any = await this.plugin.client.agents.messages.list(
 				this.plugin.currentAgent.id,
 				{ limit: 50 }
 			);
+			
+			console.log("[Letta] Messages response:", response);
 			
 			// Handle both response formats
 			if (Array.isArray(response)) {
@@ -435,6 +436,7 @@ class LettaChatView extends ItemView {
 				this.messages = [];
 			}
 			
+			console.log("[Letta] Parsed messages count:", this.messages.length);
 			this.renderMessages();
 		} catch (error) {
 			console.error("[Letta] Failed to load messages:", error);
