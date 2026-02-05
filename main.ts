@@ -467,9 +467,14 @@ class LettaChatView extends ItemView {
 		this.messagesContainer.empty();
 
 		for (const msg of this.messages) {
-			if (msg.role === "user" || msg.role === "assistant") {
+			// Check message_type field (self-hosted format)
+			const isUser = msg.message_type === "user_message";
+			const isAssistant = msg.message_type === "assistant_message";
+			
+			if (isUser || isAssistant) {
+				const role = isUser ? "user" : "assistant";
 				const msgEl = this.messagesContainer.createDiv({
-					cls: `letta-message letta-message-${msg.role}`,
+					cls: `letta-message letta-message-${role}`,
 				});
 
 				const content = msgEl.createDiv({ cls: "letta-message-content" });
@@ -483,9 +488,14 @@ class LettaChatView extends ItemView {
 						.join("\n");
 				} else if (typeof msg.content === "string") {
 					text = msg.content;
+				} else if (msg.text) {
+					// Fallback to text field
+					text = msg.text;
 				}
 
-				content.setText(text);
+				if (text) {
+					content.setText(text);
+				}
 			}
 		}
 
