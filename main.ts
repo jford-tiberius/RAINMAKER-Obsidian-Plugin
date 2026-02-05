@@ -409,7 +409,7 @@ class LettaChatView extends ItemView {
 	}
 
 	async loadMessages() {
-		if (!this.plugin.client || !this.plugin.currentAgent) {
+		if (!this.plugin.customFetch || !this.plugin.currentAgent) {
 			this.messagesContainer.empty();
 			this.messagesContainer.createDiv({
 				cls: "letta-empty-state",
@@ -420,18 +420,38 @@ class LettaChatView extends ItemView {
 
 		try {
 			console.log("[Letta] Loading messages for agent:", this.plugin.currentAgent.id);
-			const response: any = await this.plugin.client.agents.messages.list(
-				this.plugin.currentAgent.id,
-				{ limit: 50 }
-			);
 			
-			console.log("[Letta] Messages response:", response);
+			// Use raw fetch to bypass SDK validation
+			const headers: Record<string, string> = {
+				'Content-Type': 'application/json',
+			};
+			
+			if (this.plugin.settings.lettaApiKey) {
+				headers['Authorization'] = `Bearer ${this.plugin.settings.lettaApiKey}`;
+			}
+			
+			if (this.plugin.settings.lettaProjectSlug) {
+				headers['X-Project'] = this.plugin.settings.lettaProjectSlug;
+			}
+			
+			const url = `${this.plugin.settings.lettaBaseUrl}/v1/agents/${this.plugin.currentAgent.id}/messages?limit=50`;
+			const response = await this.plugin.customFetch(url, {
+				method: 'GET',
+				headers,
+			});
+			
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+			}
+			
+			const data = await response.json();
+			console.log("[Letta] Messages response:", data);
 			
 			// Handle both response formats
-			if (Array.isArray(response)) {
-				this.messages = response;
-			} else if (response && Array.isArray(response.messages)) {
-				this.messages = response.messages;
+			if (Array.isArray(data)) {
+				this.messages = data;
+			} else if (data && Array.isArray(data.messages)) {
+				this.messages = data.messages;
 			} else {
 				this.messages = [];
 			}
@@ -474,7 +494,7 @@ class LettaChatView extends ItemView {
 	}
 
 	async sendMessage() {
-		if (!this.plugin.client || !this.plugin.currentAgent || this.isStreaming) {
+		if (!this.plugin.customFetch || !this.plugin.currentAgent || this.isStreaming) {
 			return;
 		}
 
@@ -498,26 +518,67 @@ class LettaChatView extends ItemView {
 		const assistantContent = assistantMsgEl.createDiv({ cls: "letta-message-content" });
 
 		try {
-			const stream = await this.plugin.client.agents.messages.createStream(
-				this.plugin.currentAgent.id,
-				{
+			// Use raw fetch for streaming to bypass SDK
+			const headers: Record<string, string> = {
+				'Content-Type': 'application/json',
+			};
+			
+			if (this.plugin.settings.lettaApiKey) {
+				headers['Authorization'] = `Bearer ${this.plugin.settings.lettaApiKey}`;
+			}
+			
+			if (this.plugin.settings.lettaProjectSlug) {
+				headers['X-Project'] = this.plugin.settings.lettaProjectSlug;
+			}
+			
+			const url = `${this.plugin.settings.lettaBaseUrl}/v1/agents/${this.plugin.currentAgent.id}/messages/stream`;
+			const response = await this.plugin.customFetch(url, {
+				method: 'POST',
+				headers,
+				body: JSON.stringify({
 					messages: [{
 						role: "user",
 						content: [{ type: "text", text: message }],
 					}],
-				}
-			);
+				}),
+			});
 
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+			}
+
+			// Read streaming response
+			const reader = response.body?.getReader();
+			const decoder = new TextDecoder();
 			let fullText = "";
 
-			for await (const chunk of stream) {
-				// Handle different chunk types from streaming response
-				if ((chunk as any).role === "assistant" && Array.isArray((chunk as any).content)) {
-					for (const contentPart of (chunk as any).content) {
-						if (contentPart.type === "text" && contentPart.text) {
-							fullText += contentPart.text;
-							assistantContent.setText(fullText);
-							this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+			if (reader) {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					const chunk = decoder.decode(value, { stream: true });
+					const lines = chunk.split('\n');
+
+					for (const line of lines) {
+						if (line.startsWith('data: ')) {
+							const data = line.slice(6);
+							if (data === '[DONE]') continue;
+
+							try {
+								const parsed = JSON.parse(data);
+								if (parsed.role === "assistant" && Array.isArray(parsed.content)) {
+									for (const contentPart of parsed.content) {
+										if (contentPart.type === "text" && contentPart.text) {
+											fullText += contentPart.text;
+											assistantContent.setText(fullText);
+											this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+										}
+									}
+								}
+							} catch (e) {
+								// Skip unparseable lines
+							}
 						}
 					}
 				}
