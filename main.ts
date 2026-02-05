@@ -340,6 +340,20 @@ class LettaChatView extends ItemView {
 		this.agentDropdown.addEventListener("change", async () => {
 			await this.plugin.switchAgent(this.agentDropdown.value);
 		});
+		
+		// Refresh button
+		const refreshButton = header.createEl("button", {
+			cls: "letta-refresh-button",
+			text: "🔄",
+			attr: { title: "Refresh agents" },
+		});
+		
+		refreshButton.addEventListener("click", async () => {
+			refreshButton.disabled = true;
+			await this.plugin.connectToLetta();
+			this.updateAgentDropdown();
+			refreshButton.disabled = false;
+		});
 
 		// Messages container
 		this.messagesContainer = container.createDiv({ cls: "letta-messages" });
